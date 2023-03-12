@@ -1,0 +1,5 @@
+(library
+ (name fancy_triangles)
+ (libraries tgls tgls.tgl3 core triangle triangle_array bigarray_wrapper shaders)
+ (preprocess
+  (pps ppx_jane ppx_let)))

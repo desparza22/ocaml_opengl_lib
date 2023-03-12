@@ -1,0 +1,5 @@
+(library
+ (name vecn_array)
+ (libraries core bigarray_wrapper mat_vec helper)
+ (preprocess
+  (pps ppx_jane ppx_let)))

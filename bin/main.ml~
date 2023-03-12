@@ -1,0 +1,6 @@
+(*open Glfw_bindings*)
+
+
+
+let () = 
+  Glfw_bindings.Example.main ()

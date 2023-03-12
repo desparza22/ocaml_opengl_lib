@@ -1,0 +1,11 @@
+(library
+ (name draw_primitives)
+ (libraries
+  core
+  filled_circles
+  outlined_circles
+  basic_triangles
+  color_circles
+  lines)
+ (preprocess
+  (pps ppx_jane)))

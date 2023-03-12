@@ -1,0 +1,5 @@
+(library
+ (name tex_triangles_basic)
+ (libraries core tgls tgls.tgl3 mat_vec triangle helper shaders bigarray_wrapper)
+ (preprocess
+  (pps ppx_jane)))

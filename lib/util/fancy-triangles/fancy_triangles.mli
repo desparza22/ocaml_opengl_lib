@@ -1,0 +1,45 @@
+
+module Update : sig
+  type t =
+    | Vertex
+    | Color
+end
+
+
+module Sub : sig
+  type t = {
+      num_triangles : int;
+      id : int;
+      indices_id : int;
+      (* 0 to number of vertices minus 1 *)
+      indices : (int, Bigarray.int16_unsigned_elt) Bigarray_wrapper.t;
+      vertices_id : int;
+      triangle_vertices : Triangle_array.t;
+      colors_id : int;
+      triangle_colors : Triangle_array.t
+    }
+         
+(*
+  val create_fun : int -> (int -> Triangle.t) -> (int -> Triangle.t) -> t
+
+  val draw : t -> int -> unit
+
+  val update : t -> int -> Triangle.t -> Update.t -> (unit, Bigarray_wrapper.Error_type.t) Result.t
+                                                     *)
+end
+
+
+
+type t = {
+    pid : int;
+    num_triangles : int;
+    sub_triangles : Sub.t array
+  }
+
+val create_fun : int -> (int -> Triangle.t) -> (int -> Triangle.t) -> (int -> int) -> t
+
+val create_list : Triangle.t list -> (int -> Triangle.t) -> (int -> int) -> t
+
+val draw : t -> unit
+
+val update : t -> int -> Triangle.t -> Update.t -> (unit, Bigarray_wrapper.Error_type.t) Result.t

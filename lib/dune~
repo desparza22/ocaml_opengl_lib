@@ -1,0 +1,5 @@
+(library
+ (name projects)
+ (libraries linkages hello_textures)
+ (preprocess
+  (pps ppx_jane ppx_let)))

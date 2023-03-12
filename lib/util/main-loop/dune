@@ -1,0 +1,18 @@
+(library
+ (name main_loop)
+ (libraries
+  core
+  glfw-ocaml
+  tgls
+  tgls.tgl3
+  triangle
+  helper
+  shaders
+  mouse
+  draw_primitives
+  sliders
+  draggers
+  buttons
+  texts)
+ (preprocess
+  (pps ppx_jane ppx_let)))

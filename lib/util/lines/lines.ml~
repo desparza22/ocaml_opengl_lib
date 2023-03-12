@@ -1,0 +1,226 @@
+open Tgl3
+open! Core
+open Result.Let_syntax
+
+
+type t = {
+    pid : int;
+    mutable num_lines : int;
+    id : int;
+    data_id : int;
+    mutable data : (float, Bigarray.float32_elt) Bigarray_wrapper.t;
+    mutable data_capacity : int
+  }
+
+let floats_per_position, floats_per_color, vertices_per_line = 3, 4, 2
+let floats_per_vertex = floats_per_position + floats_per_color
+
+let floats_per_entry =
+  floats_per_vertex * vertices_per_line
+
+let create_program () =
+  let%bind vid =
+    Shaders.compile_shader
+      Shaders.Standard.vertex_shader_color4 Gl.vertex_shader in
+  let%bind fid =
+    Shaders.compile_shader
+      Shaders.Standard.fragment_shader Gl.fragment_shader in
+  let pid = Gl.create_program () in
+  let get_program pid e = Helper.get_int (Gl.get_programiv pid e) in
+  Gl.attach_shader pid vid; Gl.delete_shader vid;
+  Gl.attach_shader pid fid; Gl.delete_shader fid;
+  Gl.bind_attrib_location pid 0 "vertex";
+  Gl.bind_attrib_location pid 1 "color";
+  Gl.link_program pid;
+  
+  if get_program pid Gl.link_status = Gl.true_
+  then Ok pid
+  else
+    let len = get_program pid Gl.info_log_length in
+    let log = Helper.get_string len (Gl.get_program_info_log pid len None) in
+    (Gl.delete_program pid; Error (`Msg log))
+
+
+let create () =
+  let pid =
+    match create_program () with
+    | Ok pid -> pid
+    | Error (`Msg msg) ->
+       raise
+         (Invalid_argument
+            (Printf.sprintf "%s" msg)) in
+
+  let store_res =
+    Bigarray.Array1.create
+      Bigarray.int32
+      Bigarray.c_layout 1 in
+
+  Gl.gen_vertex_arrays 1 store_res;
+  let id = Int32.to_int_exn store_res.{0} in
+
+  (* data *)
+  Gl.gen_buffers 1 store_res;
+  let data_id =
+    Int32.to_int_exn store_res.{0} in
+  Gl.bind_buffer Gl.array_buffer data_id;
+  let data_capacity = 1000 in
+  let data =
+    Bigarray_wrapper.create
+      Bigarray.float32
+      (data_capacity * floats_per_entry) in
+
+  Gl.bind_vertex_array id;
+  Gl.bind_buffer Gl.array_buffer data_id;
+  Gl.enable_vertex_attrib_array 0;
+  Gl.vertex_attrib_pointer
+    0 3 Gl.float false (floats_per_vertex * 4) (`Offset 0);
+  Gl.enable_vertex_attrib_array 1;
+  Gl.vertex_attrib_pointer
+    1 4 Gl.float false (floats_per_vertex * 4) (`Offset (3 * 4));
+
+  Gl.bind_vertex_array 0;
+  Gl.bind_buffer Gl.array_buffer 0;
+  Gl.bind_buffer Gl.element_array_buffer 0;
+
+  {pid;
+   num_lines=0;
+   id;
+   data_id;
+   data;
+   data_capacity}
+
+let draw t =
+  Gl.bind_buffer Gl.array_buffer t.data_id;
+
+  Gl.buffer_data
+    Gl.array_buffer
+    (Gl.bigarray_byte_size
+       t.data.data)
+    (Some t.data.data)
+    Gl.static_draw;
+
+  Gl.use_program t.pid;
+  Gl.bind_vertex_array t.id;
+  Gl.draw_arrays
+    Gl.lines
+    0
+    (2 * t.num_lines);
+  Gl.bind_vertex_array 0
+     
+let clear t =
+  t.num_lines <- 0
+
+let expand_capacity t =
+  let new_capacity = t.data_capacity * 2 in
+  let new_data =
+    Bigarray_wrapper.create
+      Bigarray.float32
+      (new_capacity * floats_per_entry) in
+  Helper.do_n_i
+    (fun idx ->
+      match Bigarray_wrapper.get t.data ~idx with
+      | Ok elem ->
+         ignore
+           ((Bigarray_wrapper.set
+              new_data
+              ~idx
+              ~elem)
+           : (unit, Bigarray_wrapper.Error_type.t) result)
+      | _ ->
+         raise
+           (Invalid_argument "shouldn't raise"))
+    (t.num_lines * floats_per_entry);
+
+  t.data <- new_data;
+  t.data_capacity <- new_capacity
+
+let add_line t ~a ~b ~color =
+  (if Int.equal t.num_lines t.data_capacity
+   then expand_capacity t);
+  let idx = t.num_lines in
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry)
+       ~elem:(a.(0))
+    : (unit, Bigarray_wrapper.Error_type.t) result));
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 1)
+       ~elem:(a.(1)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 2)
+       ~elem:(a.(2)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 3)
+       ~elem:(color.(0)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 4)
+       ~elem:(color.(1)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 5)
+       ~elem:(color.(2)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 6)
+       ~elem:(color.(3)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);  
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 7)
+       ~elem:(b.(0)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 8)
+       ~elem:(b.(1)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 9)
+       ~elem:(b.(2)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 10)
+       ~elem:(color.(0)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 11)
+       ~elem:(color.(1)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 12)
+       ~elem:(color.(2)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+  ignore
+    ((Bigarray_wrapper.set
+       t.data
+       ~idx:(idx * floats_per_entry + 13)
+       ~elem:(color.(3)))
+     : (unit, Bigarray_wrapper.Error_type.t) result);
+
+  t.num_lines <- idx + 1

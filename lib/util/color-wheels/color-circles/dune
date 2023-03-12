@@ -1,0 +1,5 @@
+(library
+ (name color_circles)
+ (libraries core shaders circles mat_vec)
+ (preprocess
+  (pps ppx_jane)))

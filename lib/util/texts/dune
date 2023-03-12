@@ -1,0 +1,16 @@
+(library
+ (name texts)
+ (libraries
+  core
+  tgls
+  tgls.tgl3
+  mat_vec
+  basic_triangles
+  colors
+  bigarray_wrapper
+  vecn_array
+  tex_triangles_basic
+  camlimages.core
+  camlimages.png)
+ (preprocess
+  (pps ppx_jane)))

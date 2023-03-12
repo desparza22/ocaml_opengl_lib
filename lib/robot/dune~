@@ -1,0 +1,5 @@
+(library
+ (name robot)
+ (libraries core glfw_bindings main_loop shapes)
+ (preprocess
+  (pps ppx_jane)))

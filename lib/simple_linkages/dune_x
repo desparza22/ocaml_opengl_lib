@@ -1,0 +1,5 @@
+(library
+ (name simple_linkages)
+ (libraries core main_loop mat_vec sliders lines circles)
+ (preprocess
+  (pps ppx_jane)))

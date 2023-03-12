@@ -1,0 +1,5 @@
+(library
+ (name hittables)
+ (libraries core mat_vec ray helper)
+ (preprocess
+  (pps ppx_jane ppx_let)))

@@ -1,0 +1,5 @@
+(library
+ (name boids)
+ (libraries glfw_bindings tgls tgls.tgl3  mat_vec triangle helper basic_triangles main_loop core)
+ (preprocess
+  (pps ppx_jane ppx_let)))

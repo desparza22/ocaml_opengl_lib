@@ -1,0 +1,2 @@
+(** @canonical Projects.Main *)
+module Main = Projects__Main

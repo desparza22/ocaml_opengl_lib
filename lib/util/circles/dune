@@ -1,0 +1,13 @@
+(library
+ (name circles)
+ (libraries
+  core
+  tgls
+  tgls.tgl3
+  mat_vec
+  helper
+  shaders
+  bigarray_wrapper
+  draw_container)
+ (preprocess
+  (pps ppx_jane)))

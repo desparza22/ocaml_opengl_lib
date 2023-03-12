@@ -1,0 +1,38 @@
+open! Mat_vec
+open! Core
+
+module Color_wheel = struct
+  type t =
+    {
+      center : Vec.t;
+      radius : float;
+      dragger : Draggers.Dragger.t
+    }
+end
+
+type t = Color_wheel.t list
+
+let create (loop_state : Main_loop.t) =
+  let center = ([|0.; 0.; 0.|]) in
+  let dragger =
+    Draggers.add_dragger
+      loop_state.draggers
+      center
+      ~press_f:None
+      ~hold_f:None in
+  let color_wheel =
+    Color_wheel.{center;
+                 radius=0.3;
+                 dragger} in
+  [color_wheel]
+
+let draw_and_update t (loop_state : Main_loop.t) =
+  List.iter
+    t
+    ~f:(fun Color_wheel.{center; radius; _} ->
+      Color_circles.add_circle
+        loop_state.draw_primitives.color_circles
+        ~center
+        ~radius
+        ~color:Colors.white)
+    

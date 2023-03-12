@@ -1,0 +1,5 @@
+(library
+ (name color_wheels)
+ (libraries core color_circles main_loop draggers mat_vec helper draw_primitives filled_circles)
+ (preprocess
+  (pps ppx_jane)))

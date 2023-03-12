@@ -1,0 +1,12 @@
+(library
+ (name sliders)
+ (libraries
+  core
+  util
+  mat_vec
+  triangle
+  helper
+  mouse
+  draw_primitives)
+ (preprocess
+  (pps ppx_jane)))

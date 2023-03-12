@@ -1,0 +1,5 @@
+(library
+ (name draggers)
+ (libraries core mat_vec lines helper mouse draw_primitives)
+ (preprocess
+  (pps ppx_jane)))

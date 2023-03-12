@@ -1,0 +1,125 @@
+open! Core
+open Mat_vec
+
+let button_radius = 0.02
+
+module Dragger = struct
+  type t = {
+      mutable position : Vec.t;
+      mutable active : bool;
+      mutable press_f : unit -> unit;
+      mutable hold_f : (Float.t * Float.t) -> unit
+    }
+
+  let circle t =
+    let color =
+      if t.active
+      then [|1.; 1.; 1.|]
+      else [|0.6; 0.6; 0.6|] in
+    Some
+      (Circles.Circle.{center=t.position;
+                       radius=button_radius},
+       color)
+    
+  let matches_xy t ~x ~y =
+    if not t.active
+    then false
+    else
+      let dist =
+        Vec.magnitude
+          (Vec.sub [|x; y; 0.|] t.position) in
+      Helper.float_lte dist button_radius
+
+  let get_pos t =
+    t.position
+
+  let update_pos t pos =
+    t.position <- pos
+
+  let set_active t active =
+    t.active <- active
+
+  let set_press_f t press_f =
+    t.press_f <- press_f
+
+  let set_hold_f t hold_f =
+    t.hold_f <- hold_f
+end      
+
+type t = {
+    mutable draggers : Dragger.t list;
+    mutable selected : Dragger.t option;
+    mutable checked_last_click : bool;
+    mutable time : Float.t
+  }
+
+let circles t =
+  List.map t.draggers ~f:Dragger.circle
+
+let create () =
+  {draggers=[];
+   selected=None;
+   checked_last_click=false;
+   time=0.}
+
+let add_dragger t position ~press_f ~hold_f =
+  let press_f =
+    match press_f with
+    | Some f -> f
+    | None -> fun () -> () in
+  let hold_f =
+    match hold_f with
+    | Some f -> f
+    | None -> fun (_ : Float.t * Float.t) -> () in
+  let dragger =
+    Dragger.{position; active=true; press_f; hold_f} in
+  (t.draggers <- dragger::t.draggers);
+  dragger
+
+let dragger_matching_xy t x y =
+  List.find
+    t.draggers
+    ~f:(Dragger.matches_xy ~x ~y)
+
+let select_dragger t (mouse : Mouse.t) =
+  match mouse.click with
+  | Mouse.Click.Held (x, y) ->
+     (if not t.checked_last_click
+     then
+       t.selected <-
+         dragger_matching_xy t x y);
+     (match t.selected with
+      | Some dragger ->
+         let (x, y) = mouse.pos in
+         dragger.position <- [|x; y; 0.|];
+         (if not t.checked_last_click
+          then dragger.press_f ());
+         dragger.hold_f (x, y)
+     | None -> ());
+     t.checked_last_click <- true
+     
+  | Released _ ->
+     t.selected <-
+       None;
+     t.checked_last_click <- false
+
+let draw_and_update
+      (t : t) (mouse : Mouse.t) (filled_circles : Filled_circles.t) =
+  select_dragger t mouse;
+  let expand_strength =
+    (((Float.cos t.time +. 1.) /. 2.) +. 3.) /. 4. in
+  let circles = circles t in
+  (List.iter
+    circles
+    ~f:(fun circle ->
+      match circle with
+      | Some (circle, color) ->
+         Filled_circles.add_circle
+           filled_circles
+           ~center:circle.center
+           ~radius:(circle.radius *.
+                      expand_strength)
+           ~color
+      | None -> ()));
+  t.time <- t.time +. 0.025
+  

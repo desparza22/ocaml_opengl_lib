@@ -1,0 +1,5 @@
+(library
+ (name hello_colorwheel)
+ (libraries core main_loop color_wheels)
+ (preprocess
+  (pps ppx_jane)))

@@ -1,0 +1,5 @@
+(library
+ (name linkages)
+ (libraries core main_loop mat_vec sliders draggers buttons lines circles filled_circles)
+ (preprocess
+  (pps ppx_jane)))

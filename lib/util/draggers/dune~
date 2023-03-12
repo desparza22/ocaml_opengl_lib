@@ -1,0 +1,5 @@
+(library
+ (name draggers)
+ (libraries core mat_vec lines helper mouse circles filled_circles)
+ (preprocess
+  (pps ppx_jane)))

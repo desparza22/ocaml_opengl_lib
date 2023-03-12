@@ -1,0 +1,5 @@
+(library
+ (name kd_tree)
+ (libraries core sorted helper)
+ (preprocess
+  (pps ppx_jane ppx_let)))

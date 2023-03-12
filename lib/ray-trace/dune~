@@ -1,0 +1,5 @@
+(library
+ (name ray_trace)
+ (libraries core mat_vec helper screen triangle basic_triangles glfw_bindings ray camera hittables main_loop datastructures kd_tree)
+ (preprocess
+  (pps ppx_jane ppx_let)))

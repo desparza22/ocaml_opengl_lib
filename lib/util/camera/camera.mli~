@@ -1,0 +1,18 @@
+open Mat_vec
+open! Core
+
+type t =
+  {
+    focal_length : Float.t;
+    origin : Vec.t;
+    horiz : Vec.t;
+    vert : Vec.t;
+    lower_left : Vec.t;
+    width_pix : int;
+    height_pix : int
+  }
+
+val create : focal_length:Float.t -> width_world:Float.t -> height_world:Float.t ->
+             width_pix:int -> height_pix:int -> t
+
+val ray_to : t -> x:int -> y:int -> Ray.t

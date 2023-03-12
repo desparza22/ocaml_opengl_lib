@@ -1,0 +1,11 @@
+open Mat_vec
+open! Core
+
+type t =
+  {center : Vec.t;
+   radius : Float.t}
+
+val create : Vec.t -> Float.t -> t
+
+val intersections : t -> Ray.t -> dist_min:Float.t -> dist_max:Float.t -> Vec.t option
+

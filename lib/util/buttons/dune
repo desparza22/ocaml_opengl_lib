@@ -1,0 +1,5 @@
+(library
+ (name buttons)
+ (libraries core mat_vec triangle helper mouse draw_primitives)
+ (preprocess
+  (pps ppx_jane)))

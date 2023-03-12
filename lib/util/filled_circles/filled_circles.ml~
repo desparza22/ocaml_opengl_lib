@@ -1,0 +1,61 @@
+open Tgl3
+open! Core
+open Result.Let_syntax
+
+type t = {
+    circles : Circles.t
+  }
+
+let create_program () =
+  let%bind vid =
+    Shaders.compile_shader
+      Shaders.Circles.vertex_shader
+      Gl.vertex_shader in
+  let%bind gid =
+    Shaders.compile_shader
+      Shaders.Circles.Filled.geometry_shader
+      Gl.geometry_shader in
+  let%bind fid =
+    Shaders.compile_shader
+      Shaders.Circles.fragment_shader
+      Gl.fragment_shader in
+  let pid = Gl.create_program () in
+  let get_program pid e =
+    Helper.get_int (Gl.get_programiv pid e) in
+  Gl.attach_shader pid vid; Gl.delete_shader vid;
+  Gl.attach_shader pid gid; Gl.delete_shader gid;
+  Gl.attach_shader pid fid; Gl.delete_shader fid;
+  Gl.bind_attrib_location pid 0 "center";
+  Gl.bind_attrib_location pid 1 "radius";
+  Gl.bind_attrib_location pid 2 "color";
+  Gl.link_program pid;
+
+  if get_program pid Gl.link_status = Gl.true_
+  then Ok pid
+  else
+    let len = get_program pid Gl.info_log_length in
+    let log = Helper.get_string len (Gl.get_program_info_log pid len None) in
+    (Gl.delete_program pid; Error (`Msg log))
+
+let create () =
+  let pid =
+    match create_program () with
+    | Ok pid -> pid
+    | Error (`Msg msg) ->
+       raise
+         (Invalid_argument
+            (Printf.sprintf "%s" msg)) in
+
+  let circles =
+    Circles.create pid in
+  {circles}
+  
+let draw t =
+  Circles.draw t.circles
+  
+let clear t =
+  Circles.clear t.circles
+
+let add_circle t =
+  Circles.add_circle
+    t.circles

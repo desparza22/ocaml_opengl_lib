@@ -1,0 +1,5 @@
+(library
+ (name mesh)
+ (libraries core mat_vec)
+ (preprocess
+  (pps ppx_jane)))

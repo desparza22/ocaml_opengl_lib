@@ -1,0 +1,71 @@
+open Core
+open Mat_vec
+
+module Boid : sig
+
+  module Axis : sig
+    type t = X | Y | Z
+  end
+
+  type t =
+    { mutable center : Vec.t;
+      mutable homogeneous_center : Vec.t;
+      mutable norm_direction : Vec.t;
+      mutable homogeneous_norm_direction : Vec.t;
+      mutable velocity : Float.t
+    }
+
+  val create : Vec.t -> Vec.t -> Float.t -> t
+
+  val get_triangle : t -> Triangle.t
+
+  val bound : t -> min:Float.t -> max:Float.t -> dim:Axis.t -> unit
+
+  val update_position : Float.t -> Float.t -> Float.t -> Float.t -> t -> t
+
+  val update_direction : t -> Vec.t -> t
+
+end
+
+module Direction_sync : sig
+  type t =
+    {
+      dir_grid : Vec.t Array.t Array.t;
+      count_grid : int Array.t Array.t;
+      width : int;
+      height : int;
+      trans_x : Float.t -> int;
+      trans_y : Float.t -> int;
+    }
+      
+
+  val create : width:int ->
+               height:int ->
+               x_min:Float.t ->
+               x_max:Float.t ->
+               y_min:Float.t ->
+               y_max:Float.t -> t
+
+  val add_direction : t ->
+                      row:int ->
+                      col:int ->
+                      Vec.t -> unit
+
+  val add_boid : t -> Boid.t -> unit
+
+  val adjusted_boid : t -> Boid.t -> Boid.t
+
+  val normalize_all : t -> unit
+
+  val clear_all : t -> t
+end
+
+type t = Boid.t array
+
+val rand_boid : unit -> Boid.t
+
+val colors : Boid.t -> Triangle.t
+                         
+val create : int -> t
+
+val start : unit -> unit

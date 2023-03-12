@@ -1,0 +1,5 @@
+(library
+ (name lines)
+ (libraries core glfw-ocaml tgls tgls.tgl3 mat_vec vec3_array vecn_array helper shaders)
+ (preprocess
+  (pps ppx_jane ppx_let)))

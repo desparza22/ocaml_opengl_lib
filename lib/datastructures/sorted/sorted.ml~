@@ -1,0 +1,26 @@
+type 'a t =
+  {data : 'a Array.t;
+   num_elems : int;
+  comparer : 'a -> 'a -> int}
+
+let create ~size ~witness ~comparer =
+  let data = Array.create size witness in
+  {data; num_elements = 0; comparer}
+
+let rec insert_from t elem index =
+  if index >= t.num_elems
+  then ()
+  else
+    let other = t.data.(index) in
+    if comparer elem other < 0
+    then
+      (t.(index) <- elem;
+       insert_from t other (index + 1))
+    else
+      insert_from t elem (index + 1)
+
+let insert t elem =
+  insert_from t elem 0
+
+val get :
+  'a t -> int -> 'a option

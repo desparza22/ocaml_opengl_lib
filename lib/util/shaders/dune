@@ -1,0 +1,5 @@
+(library
+ (name shaders)
+ (libraries core helper tgls tgls.tgl3)
+ (preprocess
+  (pps ppx_jane)))

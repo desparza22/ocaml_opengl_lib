@@ -1,0 +1,5 @@
+(library
+ (name mat4_array)
+ (libraries core mat_vec bigarray_wrapper helper)
+ (preprocess
+  (pps ppx_jane)))

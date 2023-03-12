@@ -1,0 +1,19 @@
+open! Core
+
+type t = Color_circles.t
+
+let create (_loop_state : Main_loop.t) =
+  Color_circles.create ()
+
+
+let draw_and_update (t : t) (_loop_state : Main_loop.t) =
+  Color_circles.add_circle
+    t
+    ~center:([|0.; 0.|])
+    ~radius:0.5
+    ~color:([|1.; 1.; 1.; 1.|])
+
+let start () =
+  Main_loop.loop_draw
+    ~draw:draw_and_update
+    ~state_f:create

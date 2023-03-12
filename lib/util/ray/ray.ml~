@@ -1,0 +1,9 @@
+open Mat_vec
+open! Core
+
+type t =
+  {
+    start : Vec.t;
+    norm_direction : Vec.t;
+    length : Float.t
+  }

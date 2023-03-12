@@ -1,0 +1,45 @@
+open Mat_vec
+open! Core
+
+
+
+module Hit_record = struct
+
+
+
+
+end
+
+
+
+
+type t =
+  {center : Vec.t;
+   radius : Float.t}
+
+
+let create center radius =
+  {center; radius}
+
+(* 
+Derivation of intersection point:
+https://raytracing.github.io/books/RayTracingInOneWeekend.html 
+*)
+let intersections t (ray : Ray.t) ~dist_min ~dist_max =
+  let center_to_ray = Vec.sub ray.start t.center in
+  let a = 1.0 (*Vec.magnitude_sqrd ray.norm_direction*) in
+  let half_b = Vec.dot center_to_ray ray.norm_direction in
+  let c = Vec.magnitude_sqrd center_to_ray -. t.radius *. t.radius in
+  let discriminant = half_b *. half_b -. a *. c in
+  if Float.compare discriminant 0.0 < 0
+  then None
+  else
+    let sqrt_discriminant = Float.sqrt discriminant in
+    let close_dist = (Float.neg half_b -. sqrt_discriminant) /. a in
+    if Helper.float_within close_dist ~low:dist_min ~high:dist_max
+    then Some (Ray.point_at ray close_dist)
+    else
+      let far_dist = (Float.neg half_b +. sqrt_discriminant) /. a in
+      if Helper.float_within far_dist ~low:dist_min ~high:dist_max
+      then Some (Ray.point_at ray far_dist)
+      else None

@@ -1,0 +1,136 @@
+open Tgl3
+open! Core
+open Result.Let_syntax
+
+
+(* only draws triangles for now *)
+type t = {
+    pid : int;
+    num_shapes : int;
+    id : int;
+    transformations_id : int;
+    transformations : Mat4_array.t;
+    mutable test : Float.t
+  }
+
+let create_program () =
+  let%bind vid =
+    Shaders.compile_shader
+      Shaders.Standard.vertex_shader_color4 Gl.vertex_shader in
+  let%bind fid =
+    Shaders.compile_shader
+      Shaders.Standard.fragment_shader Gl.fragment_shader in
+  (*let%bind gid =
+    Shaders.compile_shader
+      Shaders.Multi_transform.geometry_shader Gl.geometry_shader in*)
+  let pid = Gl.create_program () in
+  let get_program pid e = Helper.get_int (Gl.get_programiv pid e) in
+  Gl.attach_shader pid vid; Gl.delete_shader vid;
+  Gl.attach_shader pid fid; Gl.delete_shader fid;
+  (*Gl.attach_shader pid gid; Gl.delete_shader gid;*)
+  (*Gl.bind_attrib_location pid 0 "transformation";*)
+  Gl.bind_attrib_location pid 0 "vertex";
+  Gl.bind_attrib_location pid 1 "color";
+  Gl.link_program pid;
+  
+  if get_program pid Gl.link_status = Gl.true_
+  then Ok pid
+  else
+    let len = get_program pid Gl.info_log_length in
+    let log = Helper.get_string len (Gl.get_program_info_log pid len None) in
+    (Gl.delete_program pid; Error (`Msg log))
+
+let create num_shapes =
+  let pid =
+    match create_program () with
+    | Ok pid -> pid
+    | Error (`Msg msg) -> raise (Invalid_argument (Printf.sprintf "%s" msg)) in
+  
+  let store_res =
+    Bigarray.Array1.create Bigarray.int32 Bigarray.c_layout 1 in
+
+  Gl.gen_vertex_arrays 1 store_res;
+  let id = Int32.to_int_exn store_res.{0} in
+
+  (*transformations*)
+  Gl.gen_buffers 1 store_res;
+  let transformations_id = Int32.to_int_exn store_res.{0} in
+  Gl.bind_buffer Gl.array_buffer transformations_id;
+  let transformations =
+    Mat4_array.create num_shapes in
+  Mat4_array.fill_f
+    transformations
+    (fun idx ->
+      let x =
+        Helper.cos_lerp
+          (Float.of_int idx /. Float.of_int num_shapes *. 10.)
+          ~low:(-0.3)
+          ~high:(0.3) in
+      let y =
+        Helper.lerp
+          (Float.of_int idx /. Float.of_int num_shapes)
+          ~low:(-0.8)
+          ~high:(0.8) in
+      Mat_vec.Transform.translation [|x; y; 0.|]);
+  Gl.buffer_data
+    Gl.array_buffer
+    (Gl.bigarray_byte_size transformations.data.data)
+    (Some transformations.data.data)
+    Gl.static_draw;
+
+  Gl.bind_vertex_array id;
+  Gl.bind_buffer Gl.array_buffer transformations_id;
+  Gl.enable_vertex_attrib_array 0;
+  Gl.vertex_attrib_pointer 0 4 Gl.float false (16 * 4) (`Offset 0);
+  Gl.enable_vertex_attrib_array 1;
+  Gl.vertex_attrib_pointer 1 4 Gl.float false (16 * 4) (`Offset (4 * 4));
+  Gl.enable_vertex_attrib_array 2;
+  Gl.vertex_attrib_pointer 2 4 Gl.float false (16 * 4) (`Offset (8 * 4));
+  Gl.enable_vertex_attrib_array 3;
+  Gl.vertex_attrib_pointer 3 4 Gl.float false (16 * 4) (`Offset (12 * 4));
+
+  Gl.bind_vertex_array 0;
+  Gl.bind_buffer Gl.array_buffer 0;
+  Gl.bind_buffer Gl.element_array_buffer 0;
+
+  
+  {pid; num_shapes; id; transformations_id; transformations; test=0.}
+
+let draw t =
+  t.test <- t.test +. 100.;
+  
+  Gl.clear_color 0. 0. 0. 1.;
+  Gl.clear Gl.color_buffer_bit;
+  
+  Gl.bind_buffer Gl.array_buffer t.transformations_id;
+  Mat4_array.fill_f
+    t.transformations
+    (fun idx ->
+      let x =
+        Helper.cos_lerp
+          ((Float.of_int idx +. t.test) /. Float.of_int t.num_shapes *. 100.)
+          ~low:(-0.3)
+          ~high:(0.3) in
+      let y =
+        Helper.lerp
+          ((Float.of_int idx +. t.test) /. Float.of_int t.num_shapes)
+          ~low:(-0.8)
+          ~high:(0.8) in
+      let y = (Helper.fmod (y +. 1.) 2.) -. 1. in
+      Mat_vec.Transform.translation [|x; y; 0.|]);
+  
+  Gl.buffer_data
+    Gl.array_buffer
+    (Gl.bigarray_byte_size
+       t.transformations.data.data)
+    (Some t.transformations.data.data)
+    Gl.static_draw;
+
+  Gl.use_program t.pid;
+  Gl.bind_vertex_array t.id;
+  Gl.draw_arrays
+    Gl.points
+    0
+    t.num_shapes;
+  Gl.bind_vertex_array 0;
+  ()

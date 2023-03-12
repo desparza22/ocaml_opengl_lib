@@ -1,0 +1,5 @@
+(library
+ (name colors)
+ (libraries core helper)
+ (preprocess
+  (pps ppx_jane)))

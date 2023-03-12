@@ -1,0 +1,108 @@
+open! Core
+open Mat_vec
+
+type t =
+  {
+    data : Vec.t array array;
+    (* todo: remove background stuff *)
+    background : x:int -> y:int -> Vec.t;
+    samples_per_pixel : int array array;
+    mutable updated_buf1 : (int * int) list;
+    mutable updated_buf2 : (int * int) list
+  }
+  
+  
+let create ~width ~height background =
+  if Int.equal (width * height) 0
+  then raise (Invalid_argument "width or height 0")
+  else
+    {data = Array.make_matrix ~dimx:width ~dimy:height [|0.; 0.; 0.|];
+     samples_per_pixel = Array.make_matrix ~dimx:width ~dimy:height 0;
+     background;
+     updated_buf1 = [];
+     updated_buf2 = []}
+
+let width t =
+  Array.length t.data
+
+let height t =
+  Array.length t.data.(0)
+
+let add t ~x ~y value =
+  t.updated_buf1 <- (x, y)::t.updated_buf1;
+  t.updated_buf2 <- (x, y)::t.updated_buf2;
+  t.data.(x).(y) <- Vec.add t.data.(x).(y) value;
+  t.samples_per_pixel.(x).(y) <- t.samples_per_pixel.(x).(y) + 1
+
+let updated t first_buffer =
+  match first_buffer with
+  | true -> t.updated_buf1
+  | false -> t.updated_buf2
+
+let clear_updated t first_buffer =
+  match first_buffer with
+  | true -> t.updated_buf1 <- []
+  | false -> t.updated_buf2 <- []
+
+let get t ~x ~y =
+  match t.samples_per_pixel.(x).(y) with
+  | 0 -> t.background ~x ~y
+  | num_samples -> Vec.scale t.data.(x).(y) (1. /. (Float.of_int num_samples))
+
+let to_string t =
+  let colors =
+    Helper.mat_init
+      ~dimx:(width t) ~dimy:(height t)
+      ~dummy_init:[||]
+      ~f:(fun x y -> get t ~x ~y) in
+  let clamped =
+    Helper.map_mat
+      colors
+      ~f:(fun vec ->
+        Array.map
+          vec
+          ~f:(fun value -> Helper.clamp value ~low:0. ~high:1.)) in
+  let scaled =
+    Helper.map_mat
+      clamped
+      ~f:(fun vec -> Array.map vec ~f:(fun value -> Float.to_int (value *. 255.))) in
+  let strings =
+    Helper.map_mat
+      scaled
+      ~f:(fun vec ->
+        Printf.sprintf "%d %d %d\n" vec.(0) vec.(1) vec.(2)) in
+  let transposed =
+    Helper.transpose strings in
+  let row_strings =
+    Array.map
+      transposed
+      ~f:(Array.fold_right
+            ~f:(fun building vec_string -> building ^ vec_string)
+            ~init:"") in
+  let preamble =
+    "P3\n" ^
+      Printf.sprintf "%d %d\n" (width t) (height t) ^
+        "255\n" in
+  let row_strings = preamble::(Array.to_list row_strings) in
+  String.concat row_strings
+
+let rec write_help file_descr str =
+  let str_len = String.length str in
+  let chars_written = Core_unix.single_write_substring file_descr ~buf:str in
+  match Int.equal chars_written str_len with
+  | true ->
+     Core_unix.close file_descr
+  | false ->
+     write_help
+       file_descr
+       (String.sub
+          str
+          ~pos:chars_written ~len:(str_len - chars_written))
+  
+let to_ppm_file t filename =
+  let str = to_string t in
+  let file_descr =
+    Core_unix.openfile ~mode:[Core_unix.O_CREAT; Core_unix.O_WRONLY; Core_unix.O_APPEND] filename in
+  write_help file_descr str
+  
+  

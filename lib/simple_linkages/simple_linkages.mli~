@@ -1,0 +1,21 @@
+open! Mat_vec
+open! Core
+
+
+type t = {
+    left_point : Vec.t;
+    right_point : Vec.t;
+    mutable crank_length : Float.t;
+    mutable coupler_length : Float.t;
+    mutable follower_length : Float.t;
+    mutable crank_theta : Float.t;
+    mutable last_trail_point : Vec.t option;
+    trail_lines : (Vec.t * Vec.t) Doubly_linked.t;
+    mutable trail_length : int;
+    mutable last_trail_point' : Vec.t option;
+    trail_lines' : (Vec.t * Vec.t) Doubly_linked.t;
+    mutable trail_length' : int;
+    sliders : Sliders.t
+  }
+       
+val start : unit -> unit

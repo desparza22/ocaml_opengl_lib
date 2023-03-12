@@ -1,0 +1,212 @@
+open Tgl3
+open Core
+
+type t =
+  {
+    mutable mouse : Mouse.t;
+    sliders : Sliders.t;
+    draggers : Draggers.t;
+    buttons : Buttons.t;
+    filled_circles : Filled_circles.t;
+    outlined_circles : Outlined_circles.t;
+    lines : Lines.t;
+    basic_triangles : Basic_triangles.t;
+    texts : Texts.t
+  }
+
+let delete_program pid =
+  Gl.delete_program pid; Ok ()
+
+
+let reshape _win w h =
+  Gl.viewport 0 0 w h
+  
+let cursor_to_window_coor x y width height =
+  let x_scaled, y_scaled =
+    (x /. Float.of_int width,
+     1. -. y /. Float.of_int height) in
+  let x_scaled, y_scaled =
+    (x_scaled *. 2. -. 1.,
+     y_scaled *. 2. -. 1.) in
+  x_scaled, y_scaled
+
+
+let loop_draw ~draw ~state_f =
+  GLFW.init ();
+  at_exit GLFW.terminate;
+  GLFW.windowHint ~hint:GLFW.ContextVersionMajor ~value:3;
+  GLFW.windowHint ~hint:GLFW.ContextVersionMinor ~value:3;
+  GLFW.windowHint ~hint:GLFW.OpenGLForwardCompat ~value:true;
+  GLFW.windowHint ~hint:GLFW.OpenGLProfile ~value:GLFW.CoreProfile;
+
+  let width, height = (640, 480) in
+  let window =
+    GLFW.createWindow
+      ~width ~height ~title:"Hello Triangles" () in
+  GLFW.makeContextCurrent ~window:(Some window);
+
+  Gl.blend_func Gl.src_alpha Gl.one_minus_src_alpha;
+  Gl.enable Gl.blend;
+
+  let loop_state =
+    {
+      mouse =
+        Mouse.{
+          click=Click.Released (0., 0.);
+          pos=(0., 0.)};
+      sliders = Sliders.create ();
+      draggers = Draggers.create ();
+      filled_circles = Filled_circles.create ();
+      outlined_circles = Outlined_circles.create ();
+      lines = Lines.create ();
+      basic_triangles = Basic_triangles.create ();
+      buttons = Buttons.create ();
+      texts = Texts.create ()
+    } in
+
+  ignore
+    ((GLFW.setMouseButtonCallback
+       ~window
+       ~f:
+       (Some
+          (fun _win _button press _mods ->
+            let x, y =
+              GLFW.getCursorPos ~window in
+            let x_scaled, y_scaled =
+              cursor_to_window_coor
+                x y width height in
+            let loc = (x_scaled, y_scaled) in
+            let mouse_click =
+              if press
+              then Mouse.Click.Held loc
+              else Mouse.Click.Released loc in
+            loop_state.mouse <-
+              Mouse.{
+                loop_state.mouse with
+                click = mouse_click})))
+     : (GLFW.window ->
+        int -> bool -> GLFW.key_mod list -> unit) option);
+  
+  let num_loops = ref 0 in
+  let state = state_f loop_state in
+  let rec loop () =
+    num_loops := !num_loops + 1;
+    match GLFW.windowShouldClose ~window with
+    | true ->
+       Printf.printf "looped %d times\n" !num_loops;
+       ()
+    | false ->
+       GLFW.swapBuffers ~window:window;
+       GLFW.pollEvents ();
+       
+       Gl.clear_color 0. 0. 0. 1.;
+       Gl.clear Gl.color_buffer_bit;
+       let x, y =
+         GLFW.getCursorPos ~window in
+       let x_scaled, y_scaled =
+         cursor_to_window_coor
+           x y width height in
+       let pos = (x_scaled, y_scaled) in
+       loop_state.mouse <-
+         Mouse.{
+           loop_state.mouse with
+           pos};
+       
+       Sliders.draw_and_update
+         loop_state.sliders
+         loop_state.mouse
+         loop_state.lines
+         loop_state.basic_triangles
+         loop_state.texts;
+       Draggers.draw_and_update
+         loop_state.draggers
+         loop_state.mouse
+         loop_state.filled_circles;
+       Buttons.draw_and_update
+         loop_state.buttons
+         loop_state.mouse
+         loop_state.basic_triangles
+         loop_state.texts;
+       Filled_circles.draw loop_state.filled_circles;
+       Filled_circles.clear loop_state.filled_circles;
+       Outlined_circles.draw loop_state.outlined_circles;
+       Outlined_circles.clear loop_state.outlined_circles;
+       Lines.draw loop_state.lines;
+       Lines.clear loop_state.lines;
+       Basic_triangles.draw loop_state.basic_triangles;
+       Basic_triangles.clear loop_state.basic_triangles;
+       draw state loop_state;
+       Texts.draw_and_update loop_state.texts;
+       
+       loop () in
+  loop ()
+
+    
+
+       (*  let tri () =
+           GLFW.init ();
+           at_exit GLFW.terminate;
+           GLFW.windowHint ~hint:GLFW.ContextVersionMajor ~value:3;
+           GLFW.windowHint ~hint:GLFW.ContextVersionMinor ~value:3;
+    GLFW.windowHint ~hint:GLFW.OpenGLForwardCompat ~value:true;
+    GLFW.windowHint ~hint:GLFW.OpenGLProfile ~value:GLFW.CoreProfile;
+    
+    let window = GLFW.createWindow ~width:640 ~height:480 ~title:"Hello Triangles" () in
+    GLFW.makeContextCurrent ~window:(Some window);
+    (*GLFW.swapInterval ~interval:0;*)
+
+    let num_triangles = Array.length !boids in
+    let nth_triangle n =
+      Boid.get_triangle !boids.(n) in
+    let triangles =
+      Basic_triangles.create_fun
+        num_triangles
+        nth_triangle
+        (nth_color !boids) in
+
+    let direction_sync = ref (Direction_sync.create 30 30 (Float.neg 1.0) 1.0 (Float.neg 1.0) 1.0) in
+    
+    let%bind pid = create_program () in
+    let num_loops = ref 0 in
+    let rec loop () =
+      match GLFW.windowShouldClose ~window:window with
+      | true ->
+         Printf.printf "looped %d times\n" !num_loops;
+         Ok ()
+      | false ->
+         num_loops := !num_loops + 1;
+         Basic_triangles.draw triangles pid;
+
+         Array.iter !boids ~f:(Direction_sync.add !direction_sync);
+         Direction_sync.normalize_all !direction_sync;
+         boids := Array.map !boids ~f:(Direction_sync.adjust_boid !direction_sync);
+         direction_sync := Direction_sync.clear_all !direction_sync;
+         let update_f idx =
+           !boids.(idx) <- Boid.update_position (Float.neg 1.0) 1.0 (Float.neg 1.0) 1.0 !boids.(idx);
+           Boid.get_triangle !boids.(idx) in
+         Helper.do_n_i
+           (fun idx ->
+             ignore (Basic_triangles.update
+                       triangles
+                       idx
+                       (update_f idx)
+                       Basic_triangles.Update.Vertex))
+           num_triangles;
+         let update_col idx =
+           nth_color !boids idx in
+         Helper.do_n_i
+           (fun idx ->
+             ignore (Basic_triangles.update
+                       triangles
+                       idx
+                       (update_col idx)
+                       Basic_triangles.Update.Color))
+           num_triangles;
+
+         
+         GLFW.swapBuffers ~window:window;
+         GLFW.pollEvents ();
+         
+         loop () in
+    loop ()
+           *)

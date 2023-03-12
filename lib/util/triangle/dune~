@@ -1,0 +1,5 @@
+(library
+ (name triangle)
+ (libraries core mat_vec)
+ (preprocess
+  (pps ppx_jane ppx_let)))

@@ -1,0 +1,997 @@
+open Mat_vec
+open! Core
+open Hittables
+open Option.Let_syntax
+
+module Material = Hittables.Surface.Material
+
+let big = 0.9
+let med1 = 0.3
+let med2 = 0.4
+let small = 0.
+let blue = [|med2; med2; big|]
+let cyan = [|med1; big; big|]
+let white = [|big; big; big|]
+let pink = [|big; med1; big|]
+let yellow = [|big; big; med1|]
+let green = [|med2; big; med2|]
+let red = [|big; med2; med2|]
+let black = [|small; small; small|]
+
+
+module Light_source = struct
+  type t =
+    {
+      hit_metal_water : bool;
+      hit_record : Hit_record.t;
+      surface : Surface.t;
+      in_ray : Ray.t;
+      in_color : Vec.t
+    }
+
+  let create hit_metal_water hit_record surface in_ray in_color =
+    {hit_metal_water; hit_record; surface; in_ray; in_color}
+
+  let propogate t hittables =
+    match Helper.float_lt
+            (Helper.rand_between 0. 1.)
+            (Surface.Material.roulette_probability t.surface.material) with
+    | true ->
+       let%bind out_ray =
+         Surface.scatter_and_attenuation
+           t.surface
+           ~ray_in:t.in_ray
+           ~hit_record:t.hit_record in
+       let%bind (hit_record, surface) =
+         intersection
+           hittables out_ray ~dist_min:0.0001 ~dist_max:30. in
+       let density_out =
+         Surface.Material.reflection_probability_density
+           surface.material
+           ~normal:t.hit_record.normal
+           ~light_out:out_ray.norm_direction
+           ~light_in_flipped:t.in_ray.norm_direction in
+       let out_color =
+         Vec.scale (Vec.mult t.in_color surface.color) density_out in
+       let hit_metal_water =
+         t.hit_metal_water ||
+           (match surface.material with
+            | Water | Metal -> true
+            | _ -> false) in
+       Some (create hit_metal_water hit_record surface out_ray out_color)
+    | false -> None
+    
+end
+
+let create_light_source =
+  Light_source.create
+
+
+
+module Sphere_light_source = struct
+
+  type t =
+    {
+      center : Vec.t;
+      radius : Float.t;
+      random_points : unit -> (Vec.t * Vec.t)
+    }
+
+  let create center radius random_points =
+    {center; radius; random_points}
+    
+  let create_light_source t hittables =
+    let (rand_point1, rand_point2) =
+      t.random_points () in
+    let rand_point =
+      if Helper.float_lt (Helper.rand_between 0. 1.) 0.5
+      then rand_point1
+      else rand_point2 in
+    let out_ray =
+      Ray.create ~start:rand_point ~direction:(Vec.sub rand_point t.center) in
+    let%map (hit_record, surface) =
+      intersection
+        hittables
+        out_ray
+        ~dist_min:0.0001
+        ~dist_max:30. in
+    let out_color = white in
+    let hit_metal_water =
+      match surface.material with
+      | Water | Metal -> true
+      | _ -> false in
+    Light_source.create hit_metal_water hit_record surface out_ray out_color
+      
+
+end
+
+type t =
+  {
+    hittables : Hittable.t list;
+    light_sources : Sphere_light_source.t list;
+    photon_map : (Light_source.t, Float.t) Kd_tree.t;
+    num_light_sources : int
+  }
+
+
+let sphere_light_source
+      ~center ~radius =
+  let rec opposite_rand_on_unit_sphere () =
+    match Vec.normalize (Vec.random_within_unit ()) with
+    | Ok normalized_random ->
+       (Vec.add center (Vec.scale normalized_random radius),
+        Vec.sub center (Vec.scale normalized_random radius))
+    | Error _ -> opposite_rand_on_unit_sphere () in
+  let light_source =
+    Sphere_light_source.create center radius opposite_rand_on_unit_sphere in
+  let shape =
+    Hittable.Shape.Sphere
+      (Sphere.create center radius) in
+  let surface =
+    Surface.create Surface.Material.Light white in
+  let hittable =
+    Hittable.create shape surface in
+  (light_source, hittable)
+  
+
+(*
+  functions:
+
+  transformation -> width_x -> width_y ->
+  (light_source * hittable)
+
+ *)
+
+let raindrop_horiz_dist point ~tail_height ~sphere_radius =
+  match Helper.float_lte point.(1) 0. with
+  | true ->
+     let sphere_center = [|0.; 0.; 0.|] in
+     let dist_to_center = Vec.magnitude (Vec.sub point sphere_center) in
+     Float.abs (dist_to_center -. sphere_radius)
+  | false ->
+     let circle_height = Float.min point.(1) tail_height in
+     (* using this for radius_lerp_t bc it looked right in Desmos *)
+     let radius_lerp_t = (1. -. circle_height /. tail_height) ** (3. *. ((circle_height /. tail_height) ** 0.8)) in
+     (*let radius_lerp_t = (1. -. circle_height /. (tail_height *. 0.95)) ** 3. in*)
+     let circle_radius = radius_lerp_t *. sphere_radius +. (1. -. radius_lerp_t) *. (sphere_radius /. 20.) in
+     let dist_to_center = Vec.magnitude (Vec.sub point [|0.; circle_height; 0.|]) in
+     Float.abs (dist_to_center -. circle_radius)
+     
+let raindrop_distance_f ~tail_height ~sphere_radius ~transformation point =
+  let point = point
+              |>
+                Vec.homogeneous_point
+              |>
+                Mat.mult_v transformation
+              |>
+                Vec.of_homogeneous in
+  let rec dist_from_drop ~drop_current ~best_dist =
+    let dist_below =
+      raindrop_horiz_dist [|point.(0); point.(1) -. drop_current; point.(2)|] ~tail_height ~sphere_radius in
+    let dist_downward = Vec.magnitude [|dist_below; drop_current|] in
+    match Helper.float_lt dist_downward best_dist with
+    | true -> 
+       dist_from_drop
+         ~drop_current:(drop_current +. dist_downward /. 80.)
+         ~best_dist:dist_downward
+    | false -> best_dist in
+  let dist_direct =
+    raindrop_horiz_dist point ~tail_height ~sphere_radius in
+  let drop_current = dist_direct /. 80. in
+  dist_from_drop
+    ~drop_current
+    ~best_dist:dist_direct
+  
+let add_raindrop ~tail_height ~sphere_radius
+      ~surface_material ~surface_color ~transformation t =
+  let raindrop_shape =
+    Hittable.Shape.Sdf
+      (Sdf.create
+         (raindrop_distance_f
+            ~tail_height ~sphere_radius ~transformation)) in
+  let raindrop_surface =
+    Surface.create
+      surface_material surface_color in
+  let raindrop = Hittable.create raindrop_shape raindrop_surface in
+  raindrop::t
+
+
+  
+(*from Inigo Quilez https://iquilezles.org/articles/distfunctions/ *) 
+let box_distance_f ~x_size ~y_size ~z_size ~transformation point =
+  let point = point
+              |>
+                Vec.homogeneous_point
+              |>
+                Mat.mult_v transformation
+              |>
+                Vec.of_homogeneous in
+  let q =
+    Vec.sub
+      (Array.map
+         point
+         ~f:Float.abs)
+      [|x_size; y_size; z_size|] in
+  let len_q_pos =
+    Vec.magnitude
+      (Array.map
+         q
+         ~f:(Float.max 0.)) in
+  let max_q =
+    Float.max
+      (Float.max
+         q.(0)
+         q.(1))
+      q.(2) in
+  let max_q_capped =
+    Float.min max_q 0. in
+  let res = Float.abs (len_q_pos +. max_q_capped) in
+  (*Printf.printf "dist: %f\n" res;*)
+  res
+
+
+let add_box ~x_size ~y_size ~z_size
+      ~surface_material ~surface_color ~transformation t =
+  let box_shape =
+    Hittable.Shape.Sdf
+      (Sdf.create
+         (box_distance_f
+            ~x_size ~y_size ~z_size ~transformation)) in
+  let box_surface =
+    Surface.create
+      surface_material surface_color in
+  let box = Hittable.create box_shape box_surface in
+  box::t
+
+
+(*
+let raindrop_from_group group =
+  let hash = group.(0) * 11 + group.(1) * 101 + group.(2) * 1001 in
+  let hash_float = (Float.of_int hash) /. 12.345 in
+  let rem = hash_float -. Float.round ~dir:`Down hash_float in
+  let tail_height = (1. -. rem) *. 0.1 +. rem *. 0.2 in
+  let hash_float = hash_float /. 10. in
+  let rem = hash_float -. Float.round ~dir:`Down hash_float in
+  let sphere_radius = (1. -. rem) *. 0.09 +. rem *. 0.15 in
+  let hash_float = hash_float *. 100. in
+  let rem = hash_float -. Float.round ~dir:`Down hash_float in
+  let x_rot = (1. -. rem) *. 0.08 +. rem *. 0.15 in
+  let hash_float = hash_float /. 1000. in
+  let z_rot = (1. -. rem) *. (-0.03) +. rem *. 0.2 in
+  let hash_float = hash_float *. 33. in
+  let x_shift = hash_float -. Float.round ~dir:`Down hash_float in
+  let hash_float = hash_float /. 11. in
+  let y_shift = hash_float -. Float.round ~dir:`Down hash_float in
+  let hash_float = hash_float *. 1.234 in
+  let z_shift = hash_float -. Float.round ~dir:`Down hash_float in
+  let transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg x_shift /. 10.; Float.neg y_shift /. 10.; Float.neg z_shift /. 10.|];
+                   Op.Rotate
+                     (Axis.Z, Float.pi *. z_rot);
+                   Op.Rotate
+                     (Axis.X, Float.pi *. x_rot)]) in
+  (tail_height, sphere_radius, transformation)
+ *)  
+  
+(*let mod_raindrops_distance_f point =
+  let z_dist = -2.0 in
+  let y_dist = 0.5 in
+  if Helper.float_gt point.(1) y_dist && Helper.float_lt point.(2) z_dist
+  then
+    let int_coords =
+      Array.map point ~f:(fun float -> Float.to_int (Float.round ~dir:`Down float)) in
+    let div_rem =
+      Array.map int_coords ~f:(fun coord -> (coord, 0)) in
+    let fractional =
+      Array.mapi point
+        ~f:(fun idx p_coor ->
+          let int_coor = int_coords.(idx) in
+          p_coor -. (Float.of_int int_coor)) in
+    let mapped_coords =
+      Array.mapi div_rem
+        ~f:(fun idx (_div, rem) ->
+          let frac_coor = fractional.(idx) in
+          (Float.of_int rem) +. frac_coor) in
+    let group =
+      Array.map div_rem ~f:(fun (div, _rem) -> div) in
+    let (_tail_height, _sphere_radius, transformation) = raindrop_from_group group in
+    box_distance_f ~x_size:0.15 ~y_size:0.15 ~z_size:0.15 ~transformation mapped_coords
+    (*raindrop_distance_f ~tail_height ~sphere_radius ~transformation mapped_coords*)
+  else Float.max (y_dist -. point.(1) +. 0.01) (point.(2) -. z_dist +. 0.01)
+ *)
+(*let add_mod_raindrops ~surface_material ~surface_color t =
+  let shape =
+    Hittable.Shape.Sdf
+      (Sdf.create mod_raindrops_distance_f) in
+  let surface =
+    Surface.create
+      surface_material surface_color in
+  let mod_raindrops = Hittable.create shape surface in
+  mod_raindrops::t
+ *)
+
+
+
+(*let rec add_spheres_around_helper ~iteration
+          ~center_x ~center_z ~height_min ~height_max ~radius_min ~radius_max t =
+      
+  let theta = iteration *. 0.1 in
+  match Helper.float_gt theta (Float.pi *. 2.) with
+  | true -> t
+  | false -> 
+     let x = (Float.sin theta) +. center_x in
+     let z = (Float.cos theta) +. center_z in
+     let y = Helper.rand_between height_min height_max in
+     let radius = Helper.rand_between radius_min radius_max in
+     let sphere = Hittables.Hittable.Shape.Sphere (Hittables.Sphere.create [|x; y; z|] radius) in
+     let material =
+       Surface.create Surface.Material.Metal [|0.7; 0.7; 0.95|] in
+     add_spheres_around_helper
+       (Hittable.create sphere material::t)
+       ~iteration:(iteration +. 1.)
+       ~center_x
+       ~center_z
+       ~height_min
+       ~height_max
+       ~radius_min
+       ~radius_max
+
+
+let add_spheres_around = add_spheres_around_helper ~iteration:0.
+ *)
+
+  
+let rec add_spheres_around_helper ~iteration
+          ~center_x ~center_z ~height_min ~height_max ~dist_min ~dist_max
+          ~radius_min ~radius_max ~theta_min ~theta_max ~num_spheres t =
+  match Int.equal iteration num_spheres with
+  | true -> t
+  | false ->
+     (*let theta_lerp = Helper.rand_between 0.0 1.0 in*)
+     let theta_lerp = (Float.of_int iteration) /. (Float.of_int (num_spheres - 1)) in
+     let dist_lerp = Helper.rand_between 0.0 1.0 in
+     let height_noise = Helper.rand_between 0.0 ((height_min -. height_max) /. 5.) in
+     let theta = theta_lerp *. theta_max +. (1. -. theta_lerp) *. theta_min in
+     let dist = dist_lerp *. dist_max +. (1. -. dist_lerp) *. dist_min in
+     let x = (Float.sin theta) *. dist +. center_x in
+     let z = (Float.cos theta) *. dist +. center_z in
+     let y = dist_lerp *. height_max +. (1. -. dist_lerp) *. height_min +. height_noise in
+     let radius = Helper.rand_between radius_min radius_max in
+     let sphere = Hittables.Hittable.Shape.Sphere (Hittables.Sphere.create [|x; y; z|] radius) in
+     let material =
+       Surface.create Surface.Material.Water white in
+     add_spheres_around_helper
+       ~iteration:(iteration + 1)
+       ~center_x
+       ~center_z
+       ~height_min
+       ~height_max
+       ~dist_min
+       ~dist_max
+       ~radius_min
+       ~radius_max
+       ~theta_min
+       ~theta_max
+       ~num_spheres
+       (Hittable.create sphere material::t)
+
+let add_spheres_around = add_spheres_around_helper ~iteration:0
+                       
+let add_spheres_above ~height_start ~radius ~transformation t =
+  let heights =
+    [ radius *. 5.; radius *. 10.; radius *. 17.;
+      radius *. 30.; radius *. 45.; radius *. 60.] in
+  List.fold
+    heights
+    ~f:(fun hittables height ->
+      let center =
+        [|0.; height_start +. height; 0.; 1.|]
+        |>
+          Mat.mult_v transformation
+        |>
+          Vec.of_homogeneous in
+      let sphere =
+        Hittable.Shape.Sphere
+          (Sphere.create center radius) in
+      let material =
+        Surface.create
+          Surface.Material.Water white in
+      (Hittable.create sphere material)::hittables)
+    ~init:t
+  
+let add_spheres circle_data t =
+  List.fold
+    circle_data
+    ~f:(fun hittables (center, radius) ->
+      let sphere =
+        Hittables.Hittable.Shape.Sphere
+          (Hittables.Sphere.create center radius) in
+      let material =
+        Surface.create
+          Surface.Material.Water white in
+      (Hittables.Hittable.create sphere material)::hittables)
+    ~init:t
+
+
+
+
+
+(*let scene1 =
+  let raindrop1_tail_height = 1.6 in
+  let raindrop1_sphere_radius = 0.35 in
+  let raindrop1_x = 1.1 in
+  let raindrop1_y = -0.6 in
+  let raindrop1_z = -1.6 in
+  let raindrop1_color = white in
+  let raindrop1_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg raindrop1_x; Float.neg raindrop1_y; Float.neg raindrop1_z|];
+                   Op.Rotate
+                     (Axis.Z, Float.pi *. 0.17);
+                   Op.Rotate
+                     (Axis.X, Float.pi *. 0.1)             
+    ]) in
+  let spheres_above1_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Rotate
+                     (Axis.X, Float.neg (Float.pi *. 0.1));
+                   Op.Rotate
+                     (Axis.Z, Float.neg (Float.pi *. 0.17));
+                   Op.Translate
+                     [|raindrop1_x; raindrop1_y; raindrop1_z|]
+    ]) in
+  let box1_x = 0.7 in
+  let box1_y = -1.1 in
+  let box1_z = -1.6 in
+  let box1_x_size = 0.5 in
+  let box1_y_size = 0.02 in
+  let box1_z_size = 0.5 in
+  let box1_color = red in
+  let box1_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box1_x; Float.neg box1_y; Float.neg box1_z|];
+                   Op.Rotate
+                     (Axis.Z, Float.pi *. 0.075);
+                   Op.Rotate
+                     (Axis.X, Float.pi *. 0.05)
+                   
+    ]) in
+  let box2_x = 0.8 in
+  let box2_y = -0.8 in
+  let box2_z = -2.6 in
+  let box2_x_size = 0.7 in
+  let box2_y_size = 0.04 in
+  let box2_z_size = 0.6 in
+  let box2_color = cyan in
+  let box2_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box2_x; Float.neg box2_y; Float.neg box2_z|];
+                   Op.Rotate
+                     (Axis.X, Float.neg (Float.pi *. 0.35))
+                   
+    ]) in
+  let box3_x = 3.2 in
+  let box3_y = -0. in
+  let box3_z = -3.5 in
+  let box3_x_size = 0.8 in
+  let box3_y_size = 0.04 in
+  let box3_z_size = 0.5 in
+  let box3_color = yellow in
+  let box3_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box3_x; Float.neg box3_y; Float.neg box3_z|];
+                   Op.Rotate
+                     (Axis.Y, Float.pi *. 0.3);
+                   Op.Rotate
+                     (Axis.X, Float.pi *. 0.45)
+                   
+    ]) in
+  let raindrop2_tail_height = 1. in
+  let raindrop2_sphere_radius = 0.25 in
+  let raindrop2_x = -1.1 in
+  let raindrop2_y = -0.6 in
+  let raindrop2_z = -1.6 in
+  let raindrop2_color = white in
+  let raindrop2_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg raindrop2_x; Float.neg raindrop2_y; Float.neg raindrop2_z|];
+                   Op.Rotate
+                     (Axis.Z, Float.neg (Float.pi *. 0.3));
+                   Op.Rotate
+                     (Axis.X, Float.pi *. 0.1)             
+    ]) in
+  let spheres_above2_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Rotate
+                     (Axis.X, Float.neg (Float.pi *. 0.1));
+                   Op.Rotate
+                     (Axis.Z, Float.pi *. 0.3);
+                   Op.Translate
+                     [|raindrop2_x; raindrop2_y; raindrop2_z|]
+    ]) in
+  let box4_x = -1.2 in
+  let box4_y = -0.9 in
+  let box4_z = -1.5 in
+  let box4_x_size = 0.4 in
+  let box4_y_size = 0.2 in
+  let box4_z_size = 0.3 in
+  let box4_color = pink in
+  let box4_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box4_x; Float.neg box4_y; Float.neg box4_z|];
+                   Op.Rotate
+                     (Axis.Y, Float.pi *. 0.085);
+                   Op.Rotate
+                     (Axis.Z, Float.neg (Float.pi *. 0.07))
+    ]) in
+  let box5_x = 0. in
+  let box5_y = 0.8 in
+  let box5_z = -4. in
+  let box5_x_size = 4. in
+  let box5_y_size = 3. in
+  let box5_z_size = 0.4 in
+  let box5_color = white in
+  let box5_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box5_x; Float.neg box5_y; Float.neg box5_z|];
+                   Op.Rotate
+                     (Axis.X, Float.pi *. 0.8)
+    ]) in
+  let box6_x = 3. in
+  let box6_y = -1.2 in
+  let box6_z = -2.5 in
+  let box6_x_size = 0.05 in
+  let box6_y_size = 0.5 in
+  let box6_z_size = 0.5 in
+  let box6_color = cyan in
+  let box6_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box6_x; Float.neg box6_y; Float.neg box6_z|];
+                   Op.Rotate
+                     (Axis.Y, Float.neg (Float.pi *. 0.15));
+                   Op.Rotate
+                     (Axis.Z, Float.pi *. 0.1)
+    ]) in
+  let box7_x = 0. in
+  let box7_y = -0.8 in
+  let box7_z = -4. in
+  let box7_x_size = 4. in
+  let box7_y_size = 3. in
+  let box7_z_size = 0.4 in
+  let box7_color = black in
+  let box7_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box7_x; Float.neg box7_y; Float.neg box7_z|];
+                   Op.Rotate
+                     (Axis.X, Float.pi *. (-0.8))
+    ]) in
+  let box8_x = -10. in
+  let box8_y = 0. in
+  let box8_z = -3. in
+  let box8_x_size = 0.5 in
+  let box8_y_size = 5. in
+  let box8_z_size = 7. in
+  let box8_color = green in
+  let box8_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box8_x; Float.neg box8_y; Float.neg box8_z|]
+    ]) in
+  let box9_x = 10. in
+  let box9_y = 0. in
+  let box9_z = -3. in
+  let box9_x_size = 0.5 in
+  let box9_y_size = 5. in
+  let box9_z_size = 7. in
+  let box9_color = green in
+  let box9_trans =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box9_x; Float.neg box9_y; Float.neg box9_z|]
+    ]) in
+  let _droplet_data =
+    [
+      ([|-0.23; -0.08; -0.2|], 0.06);
+      ([|-0.05; -0.08; -0.35|], 0.08);
+      ([|-0.28; -0.2; -0.45|], 0.06)
+    ]
+  in
+  let hittables =
+    []
+    |>
+      add_raindrop
+        ~tail_height:raindrop1_tail_height ~sphere_radius:raindrop1_sphere_radius
+        ~surface_material:Material.Water ~surface_color:raindrop1_color
+        ~transformation:raindrop1_trans
+    |>
+      add_spheres_above
+        ~height_start:raindrop1_tail_height
+        ~radius:0.02
+        ~transformation:spheres_above1_trans
+    |>
+      add_raindrop
+        ~tail_height:raindrop2_tail_height ~sphere_radius:raindrop2_sphere_radius
+        ~surface_material:Material.Water ~surface_color:raindrop2_color
+        ~transformation:raindrop2_trans
+    |>
+      add_spheres_above
+        ~height_start:raindrop2_tail_height
+        ~radius:0.02
+        ~transformation:spheres_above2_trans
+    |>
+      add_box
+        ~x_size:box1_x_size ~y_size:box1_y_size ~z_size:box1_z_size
+        ~surface_material:Material.Metal ~surface_color:box1_color
+        ~transformation:box1_trans
+    |>
+      add_box
+        ~x_size:box2_x_size ~y_size:box2_y_size ~z_size:box2_z_size
+        ~surface_material:Material.Metal ~surface_color:box2_color
+        ~transformation:box2_trans
+    |>
+      add_box
+        ~x_size:box3_x_size ~y_size:box3_y_size ~z_size:box3_z_size
+        ~surface_material:Material.Metal ~surface_color:box3_color
+        ~transformation:box3_trans
+    |>
+      add_box
+        ~x_size:box4_x_size ~y_size:box4_y_size ~z_size:box4_z_size
+        ~surface_material:Material.Diffuse ~surface_color:box4_color
+        ~transformation:box4_trans
+    |>
+      add_box
+        ~x_size:box5_x_size ~y_size:box5_y_size ~z_size:box5_z_size
+        ~surface_material:Material.Metal ~surface_color:box5_color
+        ~transformation:box5_trans
+    |>
+      add_box
+        ~x_size:box6_x_size ~y_size:box6_y_size ~z_size:box6_z_size
+        ~surface_material:Material.Metal ~surface_color:box6_color
+        ~transformation:box6_trans
+    |>  
+      add_box
+        ~x_size:box7_x_size ~y_size:box7_y_size ~z_size:box7_z_size
+        ~surface_material:Material.Diffuse ~surface_color:box7_color
+        ~transformation:box7_trans
+    |>
+      add_box
+        ~x_size:box8_x_size ~y_size:box8_y_size ~z_size:box8_z_size
+        ~surface_material:Material.Diffuse ~surface_color:box8_color
+        ~transformation:box8_trans
+    |>
+      add_box
+        ~x_size:box9_x_size ~y_size:box9_y_size ~z_size:box9_z_size
+        ~surface_material:Material.Diffuse ~surface_color:box9_color
+        ~transformation:box9_trans
+    |>
+      add_spheres_around
+        ~center_x:raindrop2_x ~center_z:raindrop2_z
+        ~height_min:raindrop2_y ~height_max:(raindrop2_y +. 0.3)
+        ~dist_min:(raindrop2_sphere_radius *. 1.3) ~dist_max:(Float.abs raindrop2_z *. 0.8)
+        ~radius_min:0.06 ~radius_max:0.08
+        ~theta_min:(Float.pi *. 0.) ~theta_max:(Float.pi *. 2.)
+        ~num_spheres:40
+  in
+  let (light_source1, light_hittable1) =
+    sphere_light_source ~center:([|3.5; 0.75; -3.|]) ~radius:0.2 in
+  let (light_source2, light_hittable2) =
+    sphere_light_source ~center:([|-3.5; 0.75; -3.|]) ~radius:0.2 in
+  let (light_source3, light_hittable3) =
+    sphere_light_source ~center:([|0.; 1.; 0.5|]) ~radius:0.2 in
+  let hittables =
+    light_hittable1::light_hittable2::light_hittable3::hittables in
+  let light_sources =
+    [light_source1; light_source2; light_source3] in
+  let rec fold_photon_map sphere_light_sources photons iters_left =
+    match iters_left with
+    | 0 -> photons
+    | _ ->
+       let from_light =
+         List.filter_map
+           sphere_light_sources
+           ~f:(fun sphere_light_source ->
+             Sphere_light_source.create_light_source
+               sphere_light_source hittables) in
+       let from_photons =
+         List.filter_map
+           photons
+           ~f:(fun light_source ->
+             Light_source.propogate light_source hittables) in
+       fold_photon_map
+         sphere_light_sources
+         (photons @ from_light @ from_photons)
+         (iters_left - 1) in
+  let photon_map = fold_photon_map light_sources [] 10 in
+  let photon_map = Array.of_list photon_map in
+  let photon_map =
+    Kd_tree.create
+      ~num_axes:3
+      ~get_axis_val:(fun (photon : Light_source.t) axis_num ->
+        photon.hit_record.hit_point.(axis_num))
+      ~subtract_axis_vals:(fun a b -> a -. b)
+      ~dist_between_elems:(fun photon_a photon_b ->
+        Float.sqrt ((photon_a.hit_record.hit_point.(0) -.
+                       photon_b.hit_record.hit_point.(0)) ** 2. +.
+                      (photon_a.hit_record.hit_point.(1) -.
+                         photon_b.hit_record.hit_point.(1)) ** 2. +.
+                      (photon_a.hit_record.hit_point.(2) -.
+                         photon_b.hit_record.hit_point.(2)) ** 2.))
+      ~data:photon_map in
+  {hittables;
+   light_sources;
+   photon_map;
+   num_light_sources=3}
+ *)
+
+let scene2 =
+  let r = 0.25 in
+  let box_width = 12. *. r in
+  (*let sphere1_center = [|-0.3; 0.3; Float.neg box_width /. 1.8|] in
+  let sphere1_radius = r in
+  let sphere1_shape =
+        Hittables.Hittable.Shape.Sphere
+          (Hittables.Sphere.create sphere1_center sphere1_radius) in
+  let sphere1_material =
+    Surface.create
+      Surface.Material.Water white in
+  let sphere1 =
+    Hittable.create sphere1_shape sphere1_material in*)
+ 
+  let box_test_loc =
+    [|0.; 0.; Float.neg box_width /. 1.3|] in
+  let box_test_size =
+    [|0.3; 0.3; 0.3|] in
+  let box_test_transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box_test_loc.(0); Float.neg box_test_loc.(1); Float.neg box_test_loc.(2)|];
+                   Op.Rotate
+                     (Axis.Y, Float.pi /. 4.);
+                   Op.Rotate
+                     (Axis.X, Float.pi /. 6.)
+                   
+    ]) in
+  let box_left_loc =
+    [|Float.neg box_width /. 2. -. 0.4; 0.; Float.neg box_width /. 0.75|] in
+  let box_left_size =
+    [|0.1; box_width; box_width|] in
+  let box_left_transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box_left_loc.(0); Float.neg box_left_loc.(1); Float.neg box_left_loc.(2)|]
+    ]) in
+  let box_right_loc =
+    [|box_width /. 2. +. 0.4; 0.; Float.neg box_width /. 0.75|] in
+  let box_right_size =
+    [|0.1; box_width; box_width|] in
+  let box_right_transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box_right_loc.(0); Float.neg box_right_loc.(1); Float.neg box_right_loc.(2)|]
+    ]) in
+  let box_bottom_loc =
+    [|0.; Float.neg box_width /. 2. -. 0.4; Float.neg box_width /. 0.75|] in
+  let box_bottom_size =
+    [|box_width; 0.1; box_width|] in
+  let box_bottom_transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box_bottom_loc.(0);
+                       Float.neg box_bottom_loc.(1);
+                       Float.neg box_bottom_loc.(2)|]
+    ]) in
+  let box_top_loc =
+    [|0.; box_width /. 2. +. 0.4; Float.neg box_width /. 0.75|] in
+  let box_top_size =
+    [|box_width; 0.1; box_width|] in
+  let box_top_transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box_top_loc.(0);
+                       Float.neg box_top_loc.(1);
+                       Float.neg box_top_loc.(2)|]
+    ]) in
+  let box_back_loc =
+    [|0.; 0.; Float.neg box_width /. 0.5|] in
+  let box_back_size =
+    [|box_width; box_width; 0.1|] in
+  let box_back_transformation =
+    Transform.(Op.transform
+                 [
+                   Op.Translate
+                     [|Float.neg box_back_loc.(0);
+                       Float.neg box_back_loc.(1);
+                       Float.neg box_back_loc.(2)|]
+    ]) in
+  let (light_source, light_hittable) =
+    sphere_light_source
+      ~center:([|0.; 0.; Float.neg box_width /. 3.5|])
+      ~radius:0.006 in
+  (*let (light_source, light_hittable) =
+    sphere_light_source
+      ~center:([|-0.6; 0.6; Float.neg box_width /. 3.5|])
+      ~radius:0.006 in*)
+  let light_sources = [light_source] in
+  let hittables =
+    [light_hittable(*; sphere1*)]
+    |>
+      add_box
+        ~x_size:box_test_size.(0) ~y_size:box_test_size.(1) ~z_size:box_test_size.(2)
+        ~surface_material:Material.Metal ~surface_color:white
+        ~transformation:box_test_transformation
+  |>
+      add_box
+        ~x_size:box_left_size.(0) ~y_size:box_left_size.(1) ~z_size:box_left_size.(2)
+        ~surface_material:Material.Diffuse ~surface_color:red
+        ~transformation:box_left_transformation
+  |>
+      add_box
+        ~x_size:box_right_size.(0) ~y_size:box_right_size.(1) ~z_size:box_right_size.(2)
+        ~surface_material:Material.Diffuse ~surface_color:red
+        ~transformation:box_right_transformation
+  |>
+      add_box
+        ~x_size:box_top_size.(0) ~y_size:box_top_size.(1) ~z_size:box_top_size.(2)
+        ~surface_material:Material.Diffuse ~surface_color:yellow
+        ~transformation:box_top_transformation
+  |>
+      add_box
+        ~x_size:box_bottom_size.(0) ~y_size:box_bottom_size.(1) ~z_size:box_bottom_size.(2)
+        ~surface_material:Material.Diffuse ~surface_color:yellow
+        ~transformation:box_bottom_transformation
+  |>
+      add_box
+        ~x_size:box_back_size.(0) ~y_size:box_back_size.(1) ~z_size:box_back_size.(2)
+        ~surface_material:Material.Diffuse ~surface_color:blue
+        ~transformation:box_back_transformation in
+  (*let rec fold_photon_map
+            sphere_light_sources on_intermediate1 on_intermediate2 on_diffuse iters_left =
+    match iters_left with
+    | 0 -> on_diffuse
+    | _ ->
+       let from_light =
+         List.filter_map
+           sphere_light_sources
+           ~f:(fun sphere_light_source ->
+             Sphere_light_source.create_light_source
+               sphere_light_source hittables) in
+       let from_light =
+         List.filter
+           from_light
+           ~f:(fun photon ->
+             match photon.surface.material with
+             | Diffuse | Light -> false
+             | Metal | Water -> true) in
+       let from_intermediate1 =
+         List.filter_map
+           on_intermediate1
+           ~f:(fun light_source ->
+               Light_source.propogate light_source hittables
+           ) in
+       let from_intermediate1 =
+         List.filter
+           from_intermediate1
+           ~f:(fun photon ->
+             match photon.surface.material with
+             | Water  -> true
+             | _ -> false) in
+       let from_intermediate2 =
+         List.filter_map
+           on_intermediate2
+           ~f:(fun light_source ->
+               Light_source.propogate light_source hittables
+           ) in
+       let from_intermediate2 =
+         List.filter
+           from_intermediate2
+           ~f:(fun photon ->
+             match photon.surface.material with
+             | Diffuse  -> true
+             | _ -> false) in
+       let on_intermediate1 = from_light in
+       let on_intermediate2 = from_intermediate1 in
+       let on_diffuse = (from_intermediate2 @ on_diffuse) in
+       fold_photon_map
+         sphere_light_sources
+         on_intermediate1
+         on_intermediate2
+         on_diffuse
+         (iters_left - 1) in*)
+  let rec fold_photon_map
+            sphere_light_sources on_intermediate on_diffuse iters_left =
+    match iters_left with
+    | 0 -> on_diffuse
+    | _ ->
+       let from_light =
+         List.filter_map
+           sphere_light_sources
+           ~f:(fun sphere_light_source ->
+             Sphere_light_source.create_light_source
+               sphere_light_source hittables) in
+       let from_light =
+         List.filter
+           from_light
+           ~f:(fun photon ->
+             match photon.surface.material with
+             | Diffuse | Light -> false
+             | Metal | Water -> true) in
+       let from_intermediate =
+         List.filter_map
+           on_intermediate
+           ~f:(fun light_source ->
+               Light_source.propogate light_source hittables
+           ) in
+       let from_intermediate =
+         List.filter
+           from_intermediate
+           ~f:(fun photon ->
+             match photon.surface.material with
+             | Diffuse -> true
+             | _ -> false) in
+       let on_diffuse = (from_intermediate @ on_diffuse) in
+       let on_intermediate = from_light in
+       fold_photon_map
+         sphere_light_sources
+         on_intermediate
+         on_diffuse
+         (iters_left - 1) in
+  let photon_map = fold_photon_map light_sources [] [] 300000 in
+  (*let photon_map =
+    List.filter
+      photon_map
+      ~f:(fun photon ->
+        photon.hit_metal_water &&
+          (match photon.surface.material with
+           | Diffuse -> true
+           | _ -> false)) in*)
+  Printf.printf "photon list length: %d\n" (List.length photon_map);
+  let photon_map = Array.of_list photon_map in
+  let photon_map =
+    Kd_tree.create
+      ~num_axes:3
+      ~get_axis_val:(fun (photon : Light_source.t) axis_num ->
+        photon.hit_record.hit_point.(axis_num))
+      ~subtract_axis_vals:(fun a b -> a -. b)
+      ~dist_between_elems:(fun photon_a photon_b ->
+        Float.sqrt ((photon_a.hit_record.hit_point.(0) -.
+                       photon_b.hit_record.hit_point.(0)) ** 2. +.
+                      (photon_a.hit_record.hit_point.(1) -.
+                         photon_b.hit_record.hit_point.(1)) ** 2. +.
+                      (photon_a.hit_record.hit_point.(2) -.
+                         photon_b.hit_record.hit_point.(2)) ** 2.))
+      ~data:photon_map in
+
+  {hittables;
+   light_sources;
+   photon_map;
+   num_light_sources=1}

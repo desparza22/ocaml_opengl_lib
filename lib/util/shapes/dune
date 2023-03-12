@@ -1,0 +1,5 @@
+(library
+ (name shapes)
+ (libraries core tgls tgls.tgl3 mat4_array mat_vec helper shaders)
+ (preprocess
+  (pps ppx_jane)))

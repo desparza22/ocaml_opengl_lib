@@ -1,0 +1,5 @@
+(library
+ (name triangle_array)
+ (libraries vec3_array triangle helper core)
+ (preprocess
+  (pps ppx_jane ppx_let)))

@@ -1,0 +1,5 @@
+(library
+ (name draw_container)
+ (libraries core tgls tgls.tgl3 mat_vec helper bigarray_wrapper shaders)
+ (preprocess
+  (pps ppx_jane)))

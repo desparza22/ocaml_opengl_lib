@@ -1,0 +1,4 @@
+(library
+ (name glfw_bindings)
+ (preprocess
+  (pps ppx_jane ppx_let)))

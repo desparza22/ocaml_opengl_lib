@@ -1,0 +1,23 @@
+open! Core
+
+open! Core
+
+type t =
+  {
+    mutable mouse : Mouse.t;
+    sliders : Sliders.t;
+    draggers : Draggers.t;
+    buttons : Buttons.t;
+    filled_circles : Filled_circles.t;
+    outlined_circles : Outlined_circles.t;
+    lines : Lines.t;
+    basic_triangles : Basic_triangles.t;
+    texts : Texts.t
+  }
+
+val delete_program : int -> (unit, _) Result.t
+
+val reshape : GLFW.window -> int -> int -> unit
+
+val loop_draw : draw:('a -> t -> unit) ->
+                state_f:(t -> 'a) -> unit

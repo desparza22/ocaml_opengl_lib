@@ -1,0 +1,6 @@
+type 'a t =
+  {data : 'a Array.t;
+   num_elems : int}
+
+val create :
+  size:int -> witness:'a -> compararer:('a -> 'a -> int) -> 'a t

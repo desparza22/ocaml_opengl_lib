@@ -1,0 +1,5 @@
+(library
+ (name basic_triangles)
+ (libraries glfw-ocaml tgls tgls.tgl3 core triangle triangle_array bigarray_wrapper shaders)
+ (preprocess
+  (pps ppx_jane ppx_let)))

@@ -1,0 +1,50 @@
+open Mat_vec
+open! Core
+   
+type t = {
+    a : Vec.t;
+    b : Vec.t;
+    c : Vec.t
+  }
+
+let create a b c =
+  {a; b; c}
+
+let create1 a =
+  {a; b=a; c=a}
+
+let print t =
+  Printf.printf
+    "Tri: %s\n%s\n%s\n"
+    (Vec.to_string t.a)
+    (Vec.to_string t.b)
+    (Vec.to_string t.c)
+
+let square_triangles ~left ~right ~top ~bottom =
+  let low_left =
+      [|left; bottom; 0.|] in
+  let low_right =
+    [|right; bottom; 0.|] in
+  let high_left =
+    [|left; top; 0.|] in
+  let high_right =
+    [|right; top; 0.|] in
+  (create
+     low_left high_left high_right,
+   create
+     low_left low_right high_right)
+
+let white () =
+  create1 [|1.; 1.; 1.; 1.|]
+
+let gray () =
+  create1 [|0.6; 0.6; 0.6; 1.|]
+
+let red () =
+  create1 [|1.; 0.; 0.; 1.|]
+    
+let green () =
+  create1 [|0.; 1.; 0.; 1.|]
+
+let blue () =
+  create1 [|0.; 0.; 1.; 1.|]

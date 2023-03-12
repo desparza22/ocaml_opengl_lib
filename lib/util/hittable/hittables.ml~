@@ -1,0 +1,306 @@
+open Mat_vec
+open! Core
+open Option.Let_syntax
+
+
+module Hit_record = struct
+
+  type t = {
+      hit_point : Vec.t;
+      normal : Vec.t;
+      hit_dist : Float.t;
+      front_face : bool
+    }
+
+  let create ~hit_point ~hit_dist ~outward_normal ~ray_direction =
+    let (front_face, normal) =
+      if Helper.float_gt (Vec.dot ray_direction outward_normal) 0.
+      then (false, Vec.scale outward_normal (Float.neg 1.0))
+      else (true, outward_normal) in
+    {hit_point; normal; hit_dist; front_face}
+
+  let hit_point t =
+    t.hit_point
+
+  let normal t =
+    t.normal
+
+end
+
+
+
+module Sphere = struct
+  type t =
+    {center : Vec.t;
+     radius : Float.t}
+
+
+  let create center radius =
+    {center; radius}
+
+  (* 
+       Derivation of intersection point:
+       https://raytracing.github.io/books/RayTracingInOneWeekend.html 
+   *)
+  let intersection t (ray : Ray.t) ~dist_min ~dist_max =
+    let center_to_ray = Vec.sub ray.start t.center in
+    let a = 1.0 (*Vec.magnitude_sqrd ray.norm_direction*) in
+    let half_b = Vec.dot center_to_ray ray.norm_direction in
+    let c = Vec.magnitude_sqrd center_to_ray -. t.radius *. t.radius in
+    let discriminant = half_b *. half_b -. a *. c in
+    let%map hit_dist = 
+      if Float.compare discriminant 0.0 < 0
+      then None
+      else
+        let sqrt_discriminant = Float.sqrt discriminant in
+        let close_dist = (Float.neg half_b -. sqrt_discriminant) /. a in
+        if Helper.float_within close_dist ~low:dist_min ~high:dist_max
+        then
+          Some close_dist
+        else
+          let far_dist = (Float.neg half_b +. sqrt_discriminant) /. a in
+          if Helper.float_within far_dist ~low:dist_min ~high:dist_max
+          then Some far_dist
+          else None in
+    let hit_point = Ray.point_at ray hit_dist in
+    let outward_normal = Vec.normalize_exn (Vec.sub hit_point t.center) in
+    Hit_record.create ~hit_point ~hit_dist ~outward_normal ~ray_direction:ray.norm_direction
+    
+end
+
+module Sdf = struct
+
+  type t = {
+      distance_f : Vec.t -> Float.t
+    }
+
+  let create distance_f =
+    {distance_f}
+
+  let rec intersection_helper t ray current_distance dist_max =
+    let current_location = Ray.point_at ray current_distance in
+    let distance_to_function = (t.distance_f current_location) in
+    if Helper.float_lt distance_to_function 0.000000001
+    then Some current_distance
+    else
+      if Helper.float_gt (current_distance +. distance_to_function) dist_max
+      then None
+      else intersection_helper t ray (current_distance +. distance_to_function) dist_max
+
+  (*
+    computation of the normal given by accepted answer to this post:
+    https://computergraphics.stackexchange.com/questions/8093/how-to-compute-normal-of-surface-from-implicit-equation-for-ray-marching
+   *)
+  let sdf_normal distance_f point =
+    let epsilon = 0.000000000001 in
+    (*let point_dist = distance_f point in*)
+    let x_dist = distance_f (Vec.add point [|epsilon; 0.; 0.|]) in
+    let y_dist = distance_f (Vec.add point [|0.; epsilon; 0.|]) in
+    let z_dist = distance_f (Vec.add point [|0.; 0.; epsilon|]) in
+    (*Vec.normalize_exn [|x_dist -. point_dist; y_dist -. point_dist; z_dist -. point_dist|]*)
+    let x_dist_neg = distance_f (Vec.sub point [|epsilon; 0.; 0.|]) in
+    let y_dist_neg = distance_f (Vec.sub point [|0.; epsilon; 0.|]) in
+    let z_dist_neg = distance_f (Vec.sub point [|0.; 0.; epsilon|]) in
+    (*Vec.scale [|x_dist -. x_dist_neg; y_dist -. y_dist_neg; z_dist -. z_dist_neg|] (1. /. (epsilon *. 2.))*)
+    (*Printf.printf "normalizing normal:\n";*)
+    match Vec.normalize [|x_dist -. x_dist_neg; y_dist -. y_dist_neg; z_dist -. z_dist_neg|] with
+    | Ok res -> res
+    | Error _ -> Vec.normalize_exn [|1.; 1.; 1.|]
+    (*Printf.printf "normalized normal\n";*)
+
+    
+    
+  let intersection t (ray : Ray.t) ~dist_min ~dist_max =
+    let current_distance = dist_min in
+    let%map hit_dist = intersection_helper t ray current_distance dist_max in
+    let hit_point = Ray.point_at ray hit_dist in
+    let outward_normal = sdf_normal t.distance_f hit_point in
+    Hit_record.create ~hit_point ~hit_dist ~outward_normal ~ray_direction:ray.norm_direction
+
+end
+
+module Surface = struct
+
+  let flip_by_norm dir_in surface_norm =
+    Vec.normalize_exn (Vec.add dir_in (Vec.scale surface_norm 2.))
+
+  module Material = struct
+    type t =
+      | Diffuse
+      | Metal
+      | Water
+      | Light
+
+    let roulette_probability t =
+      match t with
+      | Metal -> 0.9
+      | Water -> 0.97
+      | Diffuse | Light -> 0.5
+
+    let refractive_index t =
+      match t with
+      | Diffuse | Metal | Light -> 0.
+      | Water -> 1.33
+
+    let diffuse_reflection_scale dot_val =
+      Helper.clamp dot_val ~low:0. ~high:1.
+
+    let metal_reflection_scale dot_val =
+      Helper.clamp dot_val ~low:0. ~high:1.
+      |> (fun dot_val -> dot_val ** 6.)(*
+      |> (fun dot_val ->
+        dot_val ** 6. *. 7. /. 9. +.
+          (diffuse_reflection_scale dot_val *. 1. /. 9.))*)
+
+    let _water_reflection_scale dot_val =
+      if Helper.float_gte dot_val 0.
+      then diffuse_reflection_scale dot_val
+      else 1.
+
+    let reflection_probability_density
+          t ~normal ~light_out ~light_in_flipped =
+      match t with
+      | Diffuse | Light ->
+         let dot_val = Vec.dot normal light_in_flipped in
+         diffuse_reflection_scale dot_val
+      | Metal ->
+         let light_in = Vec.neg light_in_flipped in
+         let light_in_reflected = flip_by_norm light_in normal in
+         let dot_val = Vec.dot light_in_reflected light_out in
+         metal_reflection_scale dot_val
+      | Water ->
+         1.
+           (*water_reflection_scale dot_val*)
+  end
+                 
+  type t = {
+      material : Material.t;
+      color : Vec.t
+    }
+
+  let create material color =
+    {material; color}
+         
+  let diffuse_scatter (hit_record : Hit_record.t) =
+    let scatter_direction =
+      Vec.add hit_record.normal (Vec.normalize_exn (Vec.random_within_unit ())) in
+    let scatter_direction =
+      if Helper.float_lt (Vec.magnitude_sqrd scatter_direction) 0.00001
+      then hit_record.normal
+      else scatter_direction in
+    Some scatter_direction
+
+  let reflect_scatter (ray_in : Ray.t) (hit_record : Hit_record.t) =
+    let dir_in = ray_in.norm_direction in
+    let surface_norm = hit_record.normal in
+    let scatter_direction =
+      flip_by_norm dir_in surface_norm in
+    if Helper.float_gt (Vec.dot scatter_direction surface_norm) 0.
+    then
+      Some scatter_direction
+    else
+      None
+
+    
+  let metal_scatter (ray_in : Ray.t) (hit_record : Hit_record.t) =
+    if Helper.float_lt (Helper.rand_between 0. 1.) 0.9
+    then reflect_scatter ray_in hit_record
+    else diffuse_scatter hit_record
+
+  let refract_scatter (ray_in : Ray.t) (hit_record : Hit_record.t)
+        ~refractive_index_in ~refractive_index_out =
+    let dir_in = ray_in.norm_direction in
+    let surface_norm = hit_record.normal in
+    let r_in_over_r_out = refractive_index_in /. refractive_index_out in
+    let cos_theta = Float.min (Float.neg (Vec.dot dir_in surface_norm)) 1.0 in
+    let refracted_perpendicular =
+      dir_in
+      |> (fun vec -> Vec.scale vec cos_theta)
+      |> Vec.add dir_in
+      |> (fun vec -> Vec.scale vec r_in_over_r_out) in
+    let refracted_parallel =
+      1.0 -. Vec.magnitude_sqrd refracted_perpendicular
+      |> Float.abs
+      |> Float.sqrt
+      |> Float.neg
+      |> Vec.scale surface_norm in
+    Some (Vec.add refracted_perpendicular refracted_parallel)
+
+  let water_scatter (ray_in : Ray.t) (hit_record : Hit_record.t) =
+    if Helper.float_lt (Helper.rand_between 0. 1.) 0.75
+    then 
+      let refractive_index_water = Material.refractive_index Material.Water in
+      let refractive_index_air = 1.0 in
+      let (refractive_index_in, refractive_index_out) =
+        if hit_record.front_face
+        then (refractive_index_air, refractive_index_water)
+        else (refractive_index_water, refractive_index_air) in
+      refract_scatter ray_in hit_record ~refractive_index_in ~refractive_index_out
+    else
+      reflect_scatter ray_in hit_record
+    
+  let scatter_and_attenuation t ~ray_in ~hit_record  =
+    let%map scatter_direction =
+      match t.material with
+      | Diffuse ->
+           diffuse_scatter hit_record
+      | Metal ->
+           metal_scatter ray_in hit_record
+      | Water ->
+           water_scatter ray_in hit_record
+      | Light ->
+         raise (Invalid_argument "Light doesn't have scatter") in
+    Ray.create ~start:hit_record.hit_point ~direction:scatter_direction
+
+    
+    
+
+end
+
+module Hittable = struct
+  module Shape = struct
+    type t =
+      Sphere of Sphere.t
+    | Sdf of Sdf.t
+  end
+               
+  type t =
+    {
+      shape : Shape.t;
+      surface : Surface.t
+    }
+
+  let create shape surface =
+    {shape; surface}
+
+  let intersection t ray ~dist_min ~dist_max =
+    let intersection_helper =
+      match t.shape with
+      | Shape.Sphere sphere -> Sphere.intersection sphere
+      | Sdf sdf -> Sdf.intersection sdf in
+    let%map hit_record = intersection_helper ray ~dist_min ~dist_max in
+    (hit_record, t.surface)
+
+end
+
+type t = Hittable.t list
+
+let intersection t (ray : Ray.t) ~dist_min ~dist_max =
+  (*Printf.printf
+    "testing intersection start: (%f %f %f) dir: (%f %f %f)"
+    ray.start.(0) ray.start.(1) ray.start.(2) ray.norm_direction.(0) ray.norm_direction.(1) ray.norm_direction.(2);*)
+    
+  List.fold
+    t
+    ~init:None
+    ~f:(fun best next ->
+      match Hittable.intersection next ray ~dist_min ~dist_max with
+      | None -> best
+      | Some (next_hit, next_surface) ->
+         match best with
+         | None -> Some (next_hit, next_surface)
+         | Some (best_hit, best_surface) ->
+            if Helper.float_lt best_hit.hit_dist next_hit.hit_dist
+            then Some (best_hit, best_surface)
+            else Some (next_hit, next_surface))
+                
