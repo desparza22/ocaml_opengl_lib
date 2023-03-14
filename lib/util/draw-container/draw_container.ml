@@ -3,308 +3,314 @@ open! Mat_vec
 open! Core
 open Result.Let_syntax
 
-module Field = struct
-  type t = {
-      name : string;
-      floats : int
-    }
-end
 
-let create_program (fields : Field.t list) vert geom_opt frag =
-  let pid = Gl.create_program () in
-  let get_program pid e =
-    Helper.get_int (Gl.get_programiv pid e) in
+module Shared = struct
+  module Field = struct
+    type t = {
+        name : string;
+        floats : int
+      }
+  end
 
-  let%bind vid =
-    match 
-      Shaders.compile_shader
-        vert
-        Gl.vertex_shader with
-    | Ok vid -> Ok vid
-    | Error (`Msg msg) ->
-       Error (`Msg (Printf.sprintf "vertex-shader: %s" msg)) 
-  in
-  Gl.attach_shader pid vid; Gl.delete_shader vid;
-  
-  let%bind () =
-    match geom_opt with
-    | Some geom ->
-       let%map gid =
-             match 
-               Shaders.compile_shader
-                 geom
-                 Gl.geometry_shader with
-             | Ok gid -> Ok gid
-             | Error (`Msg msg) ->
-                Error
-                  (`Msg
-                     (Printf.sprintf
-                        "geometry-shader: %s" msg)) 
-       in
-       Gl.attach_shader pid gid; Gl.delete_shader gid
-    | None -> Ok () in
-        
-  let%bind fid =
-    match 
-      Shaders.compile_shader
-        frag
-        Gl.fragment_shader with
-    | Ok frag -> Ok frag
-    | Error (`Msg msg) ->
-       Error
-         (`Msg
-            (Printf.sprintf "fragment-shader: %s" msg)) 
-  in
-  Gl.attach_shader pid fid; Gl.delete_shader fid;
-  
-  List.iteri
-    fields
-    ~f:(fun idx field ->
-      Gl.bind_attrib_location pid idx field.name);
-  Gl.link_program pid;
+  let create_program
+        (fields : Field.t list) vert geom_opt frag =
+    let pid = Gl.create_program () in
+    let get_program pid e =
+      Helper.get_int (Gl.get_programiv pid e) in
 
-  if get_program pid Gl.link_status = Gl.true_
-  then Ok pid
-  else
-    let len = get_program pid Gl.info_log_length in
-    let log =
-      Helper.get_string
-        len (Gl.get_program_info_log pid len None) in
-    (Gl.delete_program pid; Error (`Msg log))
-
-
-
-module Primitive = struct
-  type t =
-    Points
-  | Lines
-  | Triangles
-end
-
-
-module Data_container = struct
-  type t = {
-      mutable data : (float, Bigarray.float32_elt) Bigarray_wrapper.t;
-      mutable data_capacity : int;
-      floats_per_vertex : int;
-      vertices_per_entry : int;
-      floats_per_entry : int
-    }
-
-  let create (fields : Field.t list) primitive =
-    let floats_per_vertex =
-      List.fold
-        fields
-        ~init:0
-        ~f:(fun accum field ->
-          accum + field.floats) in
-    let vertices_per_entry =
-      match primitive with
-      | Primitive.Points -> 1
-      | Lines -> 2
-      | Triangles -> 3 in
-    let floats_per_entry =
-      floats_per_vertex * vertices_per_entry in
-
-    let data_capacity = 1000 in
-    let data =
-      Bigarray_wrapper.create
-        Bigarray.float32
-        (data_capacity * floats_per_entry) in
-    {data; data_capacity; floats_per_vertex;
-     vertices_per_entry; floats_per_entry}
+    let%bind vid =
+      match 
+        Shaders.compile_shader
+          vert
+          Gl.vertex_shader with
+      | Ok vid -> Ok vid
+      | Error (`Msg msg) ->
+         Error
+           (`Msg (Printf.sprintf "vertex-shader: %s" msg)) 
+    in
+    Gl.attach_shader pid vid; Gl.delete_shader vid;
     
-end
-                      
-type t = {
-    pid : int;
-    primitive : Primitive.t;
-    mutable num_primitives : int;
-    fields : Field.t list;
-    id : int;
-    data_id : int;
-    data : Data_container.t
-  }
+    let%bind () =
+      match geom_opt with
+      | Some geom ->
+         let%map gid =
+           match 
+             Shaders.compile_shader
+               geom
+               Gl.geometry_shader with
+           | Ok gid -> Ok gid
+           | Error (`Msg msg) ->
+              Error
+                (`Msg
+                   (Printf.sprintf
+                      "geometry-shader: %s" msg)) 
+         in
+         Gl.attach_shader pid gid; Gl.delete_shader gid
+      | None -> Ok () in
     
+    let%bind fid =
+      match 
+        Shaders.compile_shader
+          frag
+          Gl.fragment_shader with
+      | Ok frag -> Ok frag
+      | Error (`Msg msg) ->
+         Error
+           (`Msg
+              (Printf.sprintf "fragment-shader: %s" msg)) 
+    in
+    Gl.attach_shader pid fid; Gl.delete_shader fid;
+    
+    List.iteri
+      fields
+      ~f:(fun idx field ->
+        Gl.bind_attrib_location pid idx field.name);
+    Gl.link_program pid;
 
+    if get_program pid Gl.link_status = Gl.true_
+    then Ok pid
+    else
+      let len = get_program pid Gl.info_log_length in
+      let log =
+        Helper.get_string
+          len (Gl.get_program_info_log pid len None) in
+      (Gl.delete_program pid; Error (`Msg log))
 
-let create (fields : Field.t list) primitive vert geom_opt frag () =
-  let pid =
-    match create_program fields vert geom_opt frag with
-    | Ok pid -> pid
-    | Error (`Msg msg) -> 
-       raise
-         (Invalid_argument msg) in
-
-  let store_res =
-    Bigarray.Array1.create
-      Bigarray.int32
-      Bigarray.c_layout 1 in
-
-  Gl.gen_vertex_arrays 1 store_res;
-  let id = Int32.to_int_exn store_res.{0} in
-
-  (*data*)
-  Gl.gen_buffers 1 store_res;
-  let data_id =
-    Int32.to_int_exn store_res.{0} in
-  Gl.bind_buffer Gl.array_buffer data_id;
-  let data = Data_container.create fields primitive in 
-
-  Gl.bind_vertex_array id;
-  Gl.bind_buffer Gl.array_buffer data_id;
-  ignore
-    (List.foldi
-       fields
-       ~init:0
-       ~f:(fun idx accum field ->
-         Gl.enable_vertex_attrib_array idx;
-         Gl.vertex_attrib_pointer
-           idx
-           field.floats
-           Gl.float
-           false
-           (data.floats_per_vertex * 4)
-           (`Offset accum);
-         accum + field.floats * 4)
-    : int);
       
-  Gl.bind_vertex_array 0;
-  Gl.bind_buffer Gl.array_buffer 0;
-  Gl.bind_buffer Gl.element_array_buffer 0;
+  module Primitive = struct
+    type t =
+      Points
+    | Lines
+    | Triangles
+  end
 
-  {
-    pid;
-    primitive;
-    num_primitives=0;
-    fields;
-    id;
-    data_id;
-    data
-  }
+  module Data_container = struct
+    type t = {
+        mutable data :
+                  (float, Bigarray.float32_elt)
+                    Bigarray_wrapper.t;
+        mutable data_capacity : int;
+        mutable num_entries : int;
+        floats_per_vertex : int;
+        vertices_per_entry : int;
+        floats_per_entry : int
+      }
 
-let draw t =
-  Gl.bind_buffer Gl.array_buffer t.data_id;
+    let create (fields : Field.t list) primitive =
+      let floats_per_vertex =
+        List.fold
+          fields
+          ~init:0
+          ~f:(fun accum field ->
+            accum + field.floats) in
+      let vertices_per_entry =
+        match primitive with
+        | Primitive.Points -> 1
+        | Lines -> 2
+        | Triangles -> 3 in
+      let floats_per_entry =
+        floats_per_vertex * vertices_per_entry in
 
-  Gl.buffer_data
-    Gl.array_buffer
-    (Gl.bigarray_byte_size t.data.data.data)
-    (Some t.data.data.data)
-    Gl.static_draw;
-  
-  let gl_flag =
-    match t.primitive with
-    | Primitive.Points -> Gl.points
-    | Lines -> Gl.lines
-    | Triangles -> Gl.triangles in
-  Gl.use_program t.pid;
-  Gl.bind_vertex_array t.id;
-  Gl.draw_arrays
-    gl_flag
-    0
-    (t.data.vertices_per_entry * t.num_primitives);
-  Gl.bind_vertex_array 0
+      let data_capacity = 1000 in
+      let data =
+        Bigarray_wrapper.create
+          Bigarray.float32
+          (data_capacity * floats_per_entry) in
+      {data; data_capacity; num_entries = 0;
+       floats_per_vertex; vertices_per_entry;
+       floats_per_entry}
 
-let clear t =
-  t.num_primitives <- 0
+    let expand_capacity t =
+      let new_capacity = t.data_capacity * 2 in
+      let new_data =
+        Bigarray_wrapper.create
+          Bigarray.float32
+          (new_capacity * t.floats_per_entry) in
+      Helper.do_n_i
+        (fun idx ->
+          match Bigarray_wrapper.get t.data ~idx with
+          | Ok elem ->
+             ignore
+               ((Bigarray_wrapper.set
+                   new_data
+                   ~idx
+                   ~elem)
+                : (unit, Bigarray_wrapper.Error_type.t)
+                    result)
+          | _ ->
+             raise
+               (Invalid_argument "shouldn't raise"))
+        (t.num_entries * t.floats_per_entry);
+
+      t.data <- new_data;
+      t.data_capacity <- new_capacity
 
 
-let expand_capacity t =
-  let new_capacity = t.data.data_capacity * 2 in
-  let new_data =
-    Bigarray_wrapper.create
-      Bigarray.float32
-      (new_capacity * t.data.floats_per_entry) in
-  Helper.do_n_i
-    (fun idx ->
-      match Bigarray_wrapper.get t.data.data ~idx with
-      | Ok elem ->
-         ignore
-           ((Bigarray_wrapper.set
-              new_data
-              ~idx
-              ~elem)
-           : (unit, Bigarray_wrapper.Error_type.t) result)
-      | _ ->
+    let add_entry t getter =
+      (if Int.equal t.num_entries t.data_capacity
+       then expand_capacity t);
+      let idx = t.num_entries in
+      Helper.do_n_i
+        (fun entry_i ->
+          ignore
+            ((Bigarray_wrapper.set
+                t.data
+                ~idx:(idx * t.floats_per_entry + entry_i)
+                ~elem:(getter entry_i))
+             : (unit, Bigarray_wrapper.Error_type.t) result)
+        )
+        t.floats_per_entry;
+      t.num_entries <- idx + 1 
+
+    let clear t =
+      t.num_entries <- 0
+  end
+
+  module Draw = struct
+
+    type t =
+      Basic of Primitive.t
+    | Fancy
+
+    let draw t pid id data_id
+          (data_container : Data_container.t) =
+      Gl.bind_buffer Gl.array_buffer data_id;
+
+      Gl.buffer_data
+        Gl.array_buffer
+        (Gl.bigarray_byte_size data_container.data.data)
+        (Some data_container.data.data)
+        Gl.static_draw;
+
+      Gl.use_program pid;
+      Gl.bind_vertex_array id;
+      (match t with
+       | Basic primitive ->
+          let gl_flag =
+            match primitive with
+            | Primitive.Points -> Gl.points
+            | Lines -> Gl.lines
+            | Triangles -> Gl.triangles in
+          Gl.draw_arrays
+            gl_flag
+            0
+            (data_container.vertices_per_entry *
+               data_container.num_entries)
+       | Fancy ->
+          Gl.draw_elements
+            Gl.triangles
+            data_container.num_entries
+            Gl.unsigned_short
+            (`Offset 0));
+      Gl.bind_vertex_array 0
+      
+  end
+end
+              
+module Basic = struct 
+  type t = {
+      pid : int;
+      primitive : Shared.Primitive.t;
+      fields : Shared.Field.t list;
+      id : int;
+      data_id : int;
+      data : Shared.Data_container.t
+    }
+
+  let create (fields : Shared.Field.t list) primitive
+        vert geom_opt frag () =
+    let pid =
+      match Shared.create_program
+              fields vert geom_opt frag with
+      | Ok pid -> pid
+      | Error (`Msg msg) -> 
          raise
-           (Invalid_argument "shouldn't raise"))
-    (t.num_primitives * t.data.floats_per_entry);
+           (Invalid_argument msg) in
 
-  t.data.data <- new_data;
-  t.data.data_capacity <- new_capacity
+    let store_res =
+      Bigarray.Array1.create
+        Bigarray.int32
+        Bigarray.c_layout 1 in
 
-let add_entry t getter =
-  (if Int.equal t.num_primitives t.data.data_capacity
-   then expand_capacity t);
-  let idx = t.num_primitives in
-  Helper.do_n_i
-    (fun entry_i ->
-      ignore
-        ((Bigarray_wrapper.set
-            t.data.data
-            ~idx:(idx * t.data.floats_per_entry + entry_i)
-            ~elem:(getter entry_i))
-         : (unit, Bigarray_wrapper.Error_type.t) result)
-    )
-    t.data.floats_per_entry;
-  t.num_primitives <- idx + 1
+    Gl.gen_vertex_arrays 1 store_res;
+    let id = Int32.to_int_exn store_res.{0} in
+
+    (*data*)
+    Gl.gen_buffers 1 store_res;
+    let data_id = Int32.to_int_exn store_res.{0} in
+    Gl.bind_buffer Gl.array_buffer data_id;
+    let data =
+      Shared.Data_container.create fields primitive in 
+
+    Gl.bind_vertex_array id;
+    Gl.bind_buffer Gl.array_buffer data_id;
+    ignore
+      (List.foldi
+         fields
+         ~init:0
+         ~f:(fun idx accum field ->
+           Gl.enable_vertex_attrib_array idx;
+           Gl.vertex_attrib_pointer
+             idx
+             field.floats
+             Gl.float
+             false
+             (data.floats_per_vertex * 4)
+             (`Offset accum);
+           accum + field.floats * 4)
+       : int);
+    
+    Gl.bind_vertex_array 0;
+    Gl.bind_buffer Gl.array_buffer 0;
+    Gl.bind_buffer Gl.element_array_buffer 0;
+
+    {
+      pid;
+      primitive;
+      fields;
+      id;
+      data_id;
+      data
+    }
+
+  let draw t =
+    let draw_t = Shared.Draw.Basic t.primitive in
+    Shared.Draw.draw
+      draw_t
+      t.pid
+      t.id
+      t.data_id
+
+  let clear t =
+    Shared.Data_container.clear t.data
+
+  let expand_capacity t =
+    Shared.Data_container.expand_capacity t.data
+    
+  let add_entry t getter =
+    Shared.Data_container.add_entry t.data getter
+
+end        
 
 
 module Fancy_triangles = struct
-  module Sub2 = struct
-    type t = {
-        num_triangles : int;
-        id : int;
-        indices_id : int;
-        indices : (int, Bigarray.int16_unsigned_elt) Bigarray_wrapper.t;
-        data_id : int;
-        data : Data_container.t
-      }
-
-    let create num_vertices vertices_f colors_f
-          num_triangles indices_f =
-      let store_res = Bigarray.Array1.create Bigarray.int32 Bigarray.c_layout 1 in
-
-      Gl.gen_vertex_arrays 1 store_res;
-      
-      let id = Int32.to_int_exn store_res.{0} in
-
-      (* indices *)
-      Gl.gen_buffers 1 store_res;
-      let indices_id = Int32.to_int_exn store_res.{0} in
-      Gl.bind_buffer Gl.array_buffer indices_id;
-      let indices = Bigarray_wrapper.from_fun Bigarray.int16_unsigned (num_triangles * 3) indices_f in
-      Gl.buffer_data Gl.array_buffer (Gl.bigarray_byte_size indices.data) (Some indices.data) Gl.static_draw;
-
-      (* data *)
-      Gl.gen_buffers 1 store_res;
-      let data_id =
-        Int32
-      
-  end
-
-
-  module Update = struct
-    type t =
-      | Vertex
-      | Color
-  end
-
   module Sub = struct
     type t = {
         num_triangles : int;
         id : int;
         indices_id : int;
-        (* 0 to number of vertices minus 1 *)
-        indices : (int, Bigarray.int16_unsigned_elt) Bigarray_wrapper.t;
-        vertices_id : int;
-        triangle_vertices : Triangle_array.t;
-        colors_id : int;
-        triangle_colors : Triangle_array.t
+        indices :
+          (int, Bigarray.int16_unsigned_elt)
+            Bigarray_wrapper.t;
+        data_id : int;
+        data : Shared.Data_container.t
       }
-           
-    let create_fun num_triangles vertices_f colors_f indices_f =
-      let store_res = Bigarray.Array1.create Bigarray.int32 Bigarray.c_layout 1 in
+
+    let create fields getter num_vertices
+          num_triangles indices_f =
+      let store_res =
+        Bigarray.Array1.create
+          Bigarray.int32 Bigarray.c_layout 1 in
 
       Gl.gen_vertex_arrays 1 store_res;
       
@@ -314,86 +320,39 @@ module Fancy_triangles = struct
       Gl.gen_buffers 1 store_res;
       let indices_id = Int32.to_int_exn store_res.{0} in
       Gl.bind_buffer Gl.array_buffer indices_id;
-      let indices = Bigarray_wrapper.from_fun Bigarray.int16_unsigned (num_triangles * 3) indices_f in
-      Gl.buffer_data Gl.array_buffer (Gl.bigarray_byte_size indices.data) (Some indices.data) Gl.static_draw;
+      let indices =
+        Bigarray_wrapper.from_fun
+          Bigarray.int16_unsigned
+          (num_triangles * 3) indices_f in
+      Gl.buffer_data
+        Gl.array_buffer
+        (Gl.bigarray_byte_size indices.data)
+        (Some indices.data) Gl.static_draw;
 
-      (* vertices *)
+      (* data *)
       Gl.gen_buffers 1 store_res;
-      let vertices_id = Int32.to_int_exn store_res.{0} in
-      Gl.bind_buffer Gl.array_buffer vertices_id;
-      let vertices = Triangle_array.create num_triangles in
-      Triangle_array.fill_f vertices vertices_f;
-      Gl.buffer_data Gl.array_buffer (Gl.bigarray_byte_size vertices.data.data.data) (Some vertices.data.data.data) Gl.dynamic_draw;
+      let data_id = Int32.to_int_exn store_res.{0} in
+      Gl.bind_buffer Gl.array_buffer data_id;
+      let data =
+        Shared.Data_container.create
+          fields Shared.Primitive.Triangles in
+      (Helper.do_n_i
+         (fun idx ->
+           Shared.Data_container.add_entry
+             data (getter idx))
+         num_vertices);
 
-      (* colors *)
-      Gl.gen_buffers 1 store_res;
-      let colors_id = Int32.to_int_exn store_res.{0} in
-      Gl.bind_buffer Gl.array_buffer colors_id;
-      let colors = Triangle_array.create num_triangles in
-      Triangle_array.fill_f colors colors_f;
-      Gl.buffer_data Gl.array_buffer (Gl.bigarray_byte_size colors.data.data.data) (Some colors.data.data.data) Gl.dynamic_draw;
-
-      (* bind everything to id *)
-      Gl.bind_vertex_array id;
-      (* indices *)
-      Gl.bind_buffer Gl.element_array_buffer indices_id;
-      (* vertices *)
-      Gl.bind_buffer Gl.array_buffer vertices_id;
-      Gl.enable_vertex_attrib_array 0;
-      Gl.vertex_attrib_pointer 0 3 Gl.float false 0 (`Offset 0);
-      (* colors *)
-      Gl.bind_buffer Gl.array_buffer colors_id;
-      Gl.enable_vertex_attrib_array 1;
-      Gl.vertex_attrib_pointer 1 3 Gl.float false 0 (`Offset 0);
-
-      (* reset bindings *)
-      Gl.bind_vertex_array 0;
-      Gl.bind_buffer Gl.array_buffer 0;
-      Gl.bind_buffer Gl.element_array_buffer 0;
-
-      (* return t *)
-      {num_triangles; id;
-       indices_id; indices;
-       vertices_id; triangle_vertices = vertices;
-       colors_id; triangle_colors = colors}
+      {num_triangles; id; indices_id; indices;
+       data_id; data}
 
 
     let draw t program_id =
-      (* vertices *)
-      Gl.bind_buffer Gl.array_buffer t.vertices_id;
-      Gl.buffer_data
-        Gl.array_buffer
-        (Gl.bigarray_byte_size
-           t.triangle_vertices.data.data.data)
-        (Some t.triangle_vertices.data.data.data)
-        Gl.dynamic_draw;
-
-      (* colors *)
-      Gl.bind_buffer Gl.array_buffer t.colors_id;
-      Gl.buffer_data
-        Gl.array_buffer
-        (Gl.bigarray_byte_size
-           t.triangle_colors.data.data.data)
-        (Some t.triangle_colors.data.data.data)
-        Gl.dynamic_draw;
-      
-      Gl.use_program program_id;
-      Gl.bind_vertex_array t.id;
-      Gl.draw_elements
-        Gl.triangles
-        (3 * t.triangle_vertices.size)
-        Gl.unsigned_short
-        (`Offset 0);
-      Gl.bind_vertex_array 0;
-      ()
-      
-    let update t idx triangle update =
-      let updating = 
-        match update with
-        | Update.Vertex -> t.triangle_vertices
-        | Update.Color -> t.triangle_colors in
-      Triangle_array.set updating ~idx ~triangle
-      
+      let draw_t = Shared.Draw.Fancy in
+      Shared.Draw.draw
+        draw_t
+        program_id
+        t.id
+        t.data_id
   end
 
   (* indexed by shorts, at most ~65000 indices.
@@ -405,44 +364,15 @@ module Fancy_triangles = struct
       num_triangles : int;
       sub_triangles : Sub.t array
     }
-(*
-  let create_program (fields : Field.t list) vert geom =
-    let%bind vid =
-      Shaders.compile_shader
-        Shaders.Standard.vertex_shader_color4 Gl.vertex_shader in
-    let%bind fid =
-      Shaders.compile_shader
-        Shaders.Standard.fragment_shader Gl.fragment_shader in
-    (*let%bind gid =
-    Shaders.compile_shader
-      Shaders.Multi_transform.geometry_shader Gl.geometry_shader in*)
-    let pid = Gl.create_program () in
-    let get_program pid e = Helper.get_int (Gl.get_programiv pid e) in
-    Gl.attach_shader pid vid; Gl.delete_shader vid;
-    Gl.attach_shader pid fid; Gl.delete_shader fid;
-    (*Gl.attach_shader pid gid; Gl.delete_shader gid;*)
-    (*Gl.bind_attrib_location pid 0 "transformation";*)
-    Gl.bind_attrib_location pid 0 "vertex";
-    Gl.bind_attrib_location pid 1 "color";
-    Gl.link_program pid;
-    
-    if get_program pid Gl.link_status = Gl.true_
-    then Ok pid
-    else
-      let len = get_program pid Gl.info_log_length in
-      let log = Helper.get_string len (Gl.get_program_info_log pid len None) in
-      (Gl.delete_program pid; Error (`Msg log))
-      *)
-
 
   let create_fun num_triangles vertices_f colors_f indices_f =
     let fields =
-      [Field.{name="vertex"; floats=3};
-       Field.{name="color"; floats=4}] in
+      [Shared.Field.{name="vertex"; floats=3};
+       Shared.Field.{name="color"; floats=4}] in
     let vert = Shaders.Standard.vertex_shader_color4 in
     let geom_opt = None in
     let frag = Shaders.Standard.fragment_shader in
-    match create_program fields vert geom_opt frag with
+    match Shared.create_program fields vert geom_opt frag with
     | Error (`Msg msg) ->
        raise (Invalid_argument (Printf.sprintf "%s" msg))
     | Ok pid ->
@@ -504,4 +434,8 @@ module Fancy_triangles = struct
       triangle
       update
 
+
+
+
 end
+
