@@ -1,0 +1,5 @@
+(library
+ (name hello_fancy)
+ (libraries core main_loop draw_container shaders)
+ (preprocess
+  (pps ppx_jane)))

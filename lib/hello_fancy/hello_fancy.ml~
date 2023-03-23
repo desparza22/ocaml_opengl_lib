@@ -1,0 +1,10 @@
+open! Core
+
+type t = Draw_container.Fancy.t
+
+let create (loop_state : Main_loop.t) =
+  let fields =
+    Draw_container.Shared.Field.[
+        {name="vertex"; floats=3};
+        {name="color"; floats=4}] in
+  let vert = Shaders.Standard.vertex_shader_color4 in

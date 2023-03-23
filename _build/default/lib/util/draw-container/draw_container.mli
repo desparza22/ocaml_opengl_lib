@@ -1,39 +1,48 @@
 open! Core
 
-module Field : sig
-  type t = {
-      name : string;
-      floats : int
-    }
+
+module Shared : sig
+  module Field : sig
+    type t = {
+        name : string;
+        floats : int
+      }
+  end
+
+  module Primitive : sig
+    type t =
+      Points
+    | Lines
+    | Triangles
+  end
 end
 
-module Primitive : sig
-  type t =
-    Points
-  | Lines
-  | Triangles
+module Basic : sig
+  type t
+
+  val create : Shared.Field.t list -> Shared.Primitive.t ->
+               string -> string option -> string -> t
+
+  val draw : t -> unit
+
+  val clear : t -> unit
+
+  val add_entry : t -> (int -> float) -> unit
+
+  val floats_per_vertex : t -> int
 end
 
-                     
-type t = {
-    pid : int;
-    mutable num_primitives : int;
-    id : int;
-    data_id : int;
-    mutable data : (float, Bigarray.float32_elt) Bigarray_wrapper.t;
-    mutable data_capacity : int;
-    fields : Field.t list;
-    primitive : Primitive.t;
-    floats_per_vertex : int;
-    vertices_per_entry : int;
-    floats_per_entry : int
-  }
+module Fancy : sig
+  type t
 
-val create : Field.t list -> Primitive.t -> string -> string option ->
-             string -> unit -> t
+  val create : fields:Shared.Field.t list ->
+               vert:string ->
+               geom_opt:string option ->
+               frag:string ->
+               num_vertices:int ->
+               getter:(int -> int -> float) ->
+               num_triangles:int ->
+               indices_f:(int -> int) -> t
 
-val draw : t -> unit
-
-val clear : t -> unit
-
-val add_entry : t -> (int -> float) -> unit
+  val draw : t -> unit
+end

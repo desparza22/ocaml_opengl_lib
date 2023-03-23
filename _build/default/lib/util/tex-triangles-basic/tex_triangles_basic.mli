@@ -1,6 +1,6 @@
 open! Core
 
-type t = Draw_container.t
+type t = Draw_container.Basic.t
   
 val create : unit -> t
 

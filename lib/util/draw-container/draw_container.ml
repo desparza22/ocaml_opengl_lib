@@ -202,8 +202,7 @@ module Shared = struct
             data_container.num_entries
             Gl.unsigned_short
             (`Offset 0));
-      Gl.bind_vertex_array 0
-      
+      Gl.bind_vertex_array 0      
   end
 end
               
@@ -218,7 +217,7 @@ module Basic = struct
     }
 
   let create (fields : Shared.Field.t list) primitive
-        vert geom_opt frag () =
+        vert geom_opt frag =
     let pid =
       match Shared.create_program
               fields vert geom_opt frag with
@@ -280,34 +279,48 @@ module Basic = struct
       t.pid
       t.id
       t.data_id
+      t.data
 
   let clear t =
     Shared.Data_container.clear t.data
 
-  let expand_capacity t =
-    Shared.Data_container.expand_capacity t.data
-    
   let add_entry t getter =
     Shared.Data_container.add_entry t.data getter
+
+  let floats_per_vertex t = t.data.floats_per_vertex
 
 end        
 
 
-module Fancy_triangles = struct
-  module Sub = struct
-    type t = {
-        num_triangles : int;
-        id : int;
-        indices_id : int;
-        indices :
-          (int, Bigarray.int16_unsigned_elt)
-            Bigarray_wrapper.t;
-        data_id : int;
-        data : Shared.Data_container.t
-      }
+module Fancy = struct
+  let max_vertices = Int.shift_left 1 16
+                   
+  type t = {
+      pid : int;
+      num_triangles : int;
+      id : int;
+      indices_id : int;
+      indices :
+        (int, Bigarray.int16_unsigned_elt)
+          Bigarray_wrapper.t;
+      data_id : int;
+      data : Shared.Data_container.t
+    }
 
-    let create fields getter num_vertices
-          num_triangles indices_f =
+  let create ~fields ~vert ~geom_opt ~frag
+        ~num_vertices ~getter
+        ~num_triangles ~indices_f =
+    if num_vertices > max_vertices
+    then
+      raise (Invalid_argument "excedes max vertices")
+    else
+      let pid =
+        match
+          Shared.create_program fields vert geom_opt frag
+        with
+        | Error (`Msg msg) ->
+           raise (Invalid_argument (Printf.sprintf "%s" msg))
+        | Ok pid -> pid in
       let store_res =
         Bigarray.Array1.create
           Bigarray.int32 Bigarray.c_layout 1 in
@@ -335,107 +348,24 @@ module Fancy_triangles = struct
       Gl.bind_buffer Gl.array_buffer data_id;
       let data =
         Shared.Data_container.create
-          fields Shared.Primitive.Triangles in
+          fields Shared.Primitive.Points in
       (Helper.do_n_i
          (fun idx ->
            Shared.Data_container.add_entry
              data (getter idx))
          num_vertices);
 
-      {num_triangles; id; indices_id; indices;
+      {pid; num_triangles; id; indices_id; indices;
        data_id; data}
 
 
-    let draw t program_id =
-      let draw_t = Shared.Draw.Fancy in
-      Shared.Draw.draw
-        draw_t
-        program_id
-        t.id
-        t.data_id
-  end
-
-  (* indexed by shorts, at most ~65000 indices.
-   three indices per triangle, so at most ~20000 triangles *)
-  let triangles_per_subarray = 20000
-
-  type t = {
-      pid : int;
-      num_triangles : int;
-      sub_triangles : Sub.t array
-    }
-
-  let create_fun num_triangles vertices_f colors_f indices_f =
-    let fields =
-      [Shared.Field.{name="vertex"; floats=3};
-       Shared.Field.{name="color"; floats=4}] in
-    let vert = Shaders.Standard.vertex_shader_color4 in
-    let geom_opt = None in
-    let frag = Shaders.Standard.fragment_shader in
-    match Shared.create_program fields vert geom_opt frag with
-    | Error (`Msg msg) ->
-       raise (Invalid_argument (Printf.sprintf "%s" msg))
-    | Ok pid ->
-       let num_subs =
-         (num_triangles - 1) /
-           triangles_per_subarray + 1 in
-       let sub_triangles =
-         Array.init
-           num_subs
-           ~f:(fun sub_num ->
-             let sub_num_triangles =
-               if Int.equal sub_num (num_subs - 1) &&
-                    (not (Int.equal
-                            (num_triangles mod
-                               triangles_per_subarray)
-                            0))
-               then
-                 num_triangles mod
-                   triangles_per_subarray
-               else
-                 triangles_per_subarray in
-             
-             let start_idx =
-               triangles_per_subarray * sub_num in
-             let shifted_vertices_f =
-               (fun idx ->
-                 vertices_f (idx + start_idx)) in
-             let shifted_colors_f =
-               (fun idx ->
-                 colors_f (idx + start_idx)) in
-             let shifted_indices_f =
-               (fun idx ->
-                 indices_f (idx + start_idx)) in
-             Sub.create_fun
-               sub_num_triangles
-               shifted_vertices_f
-               shifted_colors_f
-               shifted_indices_f) in
-       {pid; num_triangles; sub_triangles}
-
-  let create_list vertices_list =
-    let num_triangles = List.length vertices_list in
-    let vertices_array = List.to_array vertices_list in
-    let vertices_f =
-      (fun idx -> vertices_array.(idx)) in
-    create_fun num_triangles vertices_f
-
   let draw t =
-    Array.iter
-      t.sub_triangles
-      ~f:(fun sub -> Sub.draw sub t.pid)
-
-  let update t idx triangle update =
-    let sub_num = idx / triangles_per_subarray in
-    let idx_in_sub = idx mod triangles_per_subarray in
-    Sub.update
-      t.sub_triangles.(sub_num)
-      idx_in_sub
-      triangle
-      update
-
-
-
-
+    let draw_t = Shared.Draw.Fancy in
+    Shared.Draw.draw
+      draw_t
+      t.pid
+      t.id
+      t.data_id
+      t.data
 end
 
